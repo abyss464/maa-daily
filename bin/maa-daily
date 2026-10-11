@@ -1,0 +1,8 @@
+#!/bin/sh
+# Entry point of maa-daily (web page and scheduler). Runs src/main.js with fnm's default Node,
+# or the node on PATH, so it works from systemd and any shell.
+self=$(readlink -f "$0")
+root=$(dirname "$(dirname "$self")")
+node="$HOME/.local/share/fnm/aliases/default/bin/node"
+[ -x "$node" ] || node=node
+exec "$node" "$root/src/main.js" "$@"

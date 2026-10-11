@@ -1,0 +1,17 @@
+[Unit]
+Description=maa-daily: scheduled Arknights dailies through MAA in a Windows guest, with a web page
+Documentation=file://%h/Code/apps/maa-daily/README.md
+After=windows-pool.service
+Wants=windows-pool.service
+
+[Service]
+Type=simple
+# Serves http://127.0.0.1:30019 and starts runs at the configured times of day.
+ExecStart=%h/Code/apps/maa-daily/bin/maa-daily
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

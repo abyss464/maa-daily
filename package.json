@@ -1,0 +1,13 @@
+{
+  "name": "maa-daily",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Scheduled Arknights dailies for several accounts: MAA in a Windows guest from the windows pool, managed from a web page with run history and statistics",
+  "bin": {
+    "maa-daily": "bin/maa-daily"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
