@@ -21,9 +21,10 @@ export function stats({ days = 30 } = {}) {
     if (r.status === 'ok') ok += 1;
     const day = dayOf(r.startedAt);
     for (const [id, a] of Object.entries(r.accounts || {})) {
-      if (a.status === 'skipped' || a.status === 'pending') continue;
+      if (['skipped', 'pending'].includes(a.status)) continue;
       const s = (accounts[id] ||= { id, name: a.name, runs: 0, ok: 0, battles: 0, seconds: 0, recruits: 0, medicine: 0, stone: 0, drops: {}, stages: {}, lastOk: null, lastRun: null });
-      s.runs += 1;
+      // A yielded account's battles and drops count; the attempt itself does not.
+      if (a.status !== 'yielded') s.runs += 1;
       if (a.status === 'ok') {
         s.ok += 1;
         if (!s.lastOk || r.startedAt > s.lastOk) s.lastOk = r.startedAt;

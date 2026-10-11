@@ -35,8 +35,8 @@ class Orchestrator {
 
   busy() {
     if (!this.current) return null;
-    const { kind, label, runId, stage, startedAt, stopping } = this.current;
-    return { kind, label, runId, stage, startedAt, stopping: Boolean(stopping) };
+    const { kind, label, runId, trigger, stage, startedAt, stopping } = this.current;
+    return { kind, label, runId, trigger, stage, startedAt, stopping: Boolean(stopping) };
   }
 
   claim(kind, label) {
@@ -67,8 +67,9 @@ class Orchestrator {
       accounts: Object.fromEntries(accounts.map((a) => [a.id, emptyResult(a)])),
     };
     cur.runId = run.id;
+    cur.trigger = trigger;
     runs.save(run);
-    this.log(run.id, `开始运行（${trigger === 'schedule' ? '定时' : '手动'}），账号：${accounts.map((a) => a.name).join('、')}`);
+    this.log(run.id, `开始运行（${TRIGGER[trigger] || trigger}），账号：${accounts.map((a) => a.name).join('、')}`);
     this.execute(run, accounts).finally(() => {
       this.current = null;
     });
@@ -122,8 +123,7 @@ class Orchestrator {
 
       const results = Object.values(run.accounts);
       if (this.current.stopping) {
-        run.status = 'stopped';
-        run.error = '已手动停止';
+        this.markStopped(run);
       } else if (fatal || !finished) {
         run.status = 'failed';
         run.error = fatal || 'MAA 意外退出';
@@ -132,9 +132,12 @@ class Orchestrator {
       }
       for (const r of results) if (r.status === 'pending' || r.status === 'running') r.status = r.status === 'running' ? 'failed' : 'skipped';
     } catch (e) {
-      run.status = this.current?.stopping ? 'stopped' : 'failed';
-      run.error = e.message;
-      this.log(run.id, `出错：${e.message}`);
+      if (this.current?.stopping) this.markStopped(run);
+      else {
+        run.status = 'failed';
+        run.error = e.message;
+        this.log(run.id, `出错：${e.message}`);
+      }
     }
     run.endedAt = new Date().toISOString();
     runs.save(run);
@@ -212,9 +215,24 @@ class Orchestrator {
     runs.save(run);
   }
 
-  stop() {
+  // A run stopped by hand, or because the owner came back to an idle run ('yield'). Accounts
+  // it interrupted count as yielded, not failed, so they stay due without a retry delay.
+  markStopped(run) {
+    const yielded = this.current.stopReason === 'yield';
+    run.status = yielded ? 'yielded' : 'stopped';
+    run.error = yielded ? '电脑有人使用，已让出' : '已手动停止';
+    for (const a of Object.values(run.accounts)) {
+      if (a.status === 'running') a.status = 'yielded';
+      else if (a.status === 'pending') a.status = 'skipped';
+    }
+  }
+
+  stop(reason = 'manual') {
     if (!this.current) throw Object.assign(new Error('当前没有运行'), { status: 409 });
+    if (this.current.kind !== 'run') throw Object.assign(new Error(`正在${this.current.label}，不能停止`), { status: 409 });
     this.current.stopping = true;
+    this.current.stopReason = reason;
+    if (this.current.runId) this.log(this.current.runId, reason === 'yield' ? '检测到电脑有人使用，停止运行' : '收到停止请求');
     this.current.stage = '正在停止';
     if (this.current.child) {
       this.current.child.kill();
@@ -270,7 +288,8 @@ class Orchestrator {
   }
 }
 
-export const STATUS = { running: '运行中', ok: '成功', partial: '部分成功', failed: '失败', stopped: '已停止', interrupted: '被中断', skipped: '跳过' };
+export const STATUS = { running: '运行中', ok: '成功', partial: '部分成功', failed: '失败', stopped: '已停止', yielded: '已让出', interrupted: '被中断', skipped: '跳过' };
+const TRIGGER = { idle: '闲时', manual: '手动' };
 const CHAINS = { StartUp: '开始唤醒', Fight: '理智作战', Recruit: '公开招募', Infrast: '基建换班', Mall: '信用商店', Award: '领取奖励', CloseDown: '关闭游戏' };
 const CHAIN_STATE = { done: '完成', error: '出错', stopped: '被停止', start: '进行中' };
 

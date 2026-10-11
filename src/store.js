@@ -13,8 +13,15 @@ const RUNS = path.join(config.dataDir, 'runs');
 
 export const DEFAULT_SETTINGS = {
   enabled: true,
-  // Local times of day ("HH:MM") a run starts on its own.
-  times: ['05:00', '17:00'],
+  // A run starts on its own once the desktop has had no input (and no idle inhibitor, such as
+  // a playing video) for this many minutes, for the accounts that are due.
+  idleMinutes: 10,
+  // An account is due when it has not succeeded since the daily reset, or for this many hours.
+  intervalHours: 10,
+  // After a failed attempt an account waits this long before the next idle run tries it again.
+  retryMinutes: 60,
+  // Input on the desktop ends an idle run; the accounts it did not finish stay due.
+  stopWhenActive: true,
   instance: 'arknights',
   // Shut the emulator and Windows down after a run, when the run was what started Windows.
   shutdownAfter: true,
@@ -50,7 +57,9 @@ function writeAtomic(file, data) {
 function load() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
-    return { settings: { ...DEFAULT_SETTINGS, ...s.settings }, accounts: s.accounts || [] };
+    const settings = { ...DEFAULT_SETTINGS, ...s.settings };
+    delete settings.times;
+    return { settings, accounts: s.accounts || [] };
   } catch {
     return { settings: { ...DEFAULT_SETTINGS }, accounts: [] };
   }
@@ -61,11 +70,10 @@ const save = () => writeAtomic(STATE, state);
 
 export class InputError extends Error {}
 
-function checkTimes(times) {
-  if (!Array.isArray(times)) throw new InputError('运行时间必须是列表');
-  const out = [...new Set(times.map((t) => String(t).trim()).filter(Boolean))];
-  for (const t of out) if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw new InputError(`时间格式应为 HH:MM：${t}`);
-  return out.sort();
+function intIn(v, min, max, what) {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < min || n > max) throw new InputError(`${what}应为 ${min}–${max} 的整数`);
+  return n;
 }
 
 function cleanAccount(body, base = {}) {
@@ -103,14 +111,13 @@ export const store = {
   updateSettings(body) {
     const s = { ...state.settings };
     if (body.enabled !== undefined) s.enabled = Boolean(body.enabled);
-    if (body.times !== undefined) s.times = checkTimes(body.times);
+    if (body.idleMinutes !== undefined) s.idleMinutes = intIn(body.idleMinutes, 1, 240, '空闲分钟数');
+    if (body.intervalHours !== undefined) s.intervalHours = intIn(body.intervalHours, 1, 48, '间隔小时数');
+    if (body.retryMinutes !== undefined) s.retryMinutes = intIn(body.retryMinutes, 5, 1440, '失败重试分钟数');
+    if (body.stopWhenActive !== undefined) s.stopWhenActive = Boolean(body.stopWhenActive);
     if (body.shutdownAfter !== undefined) s.shutdownAfter = Boolean(body.shutdownAfter);
     if (body.closeGame !== undefined) s.closeGame = Boolean(body.closeGame);
-    if (body.accountTimeoutMin !== undefined) {
-      const n = Number(body.accountTimeoutMin);
-      if (!Number.isInteger(n) || n < 5 || n > 600) throw new InputError('单账号超时应为 5–600 分钟');
-      s.accountTimeoutMin = n;
-    }
+    if (body.accountTimeoutMin !== undefined) s.accountTimeoutMin = intIn(body.accountTimeoutMin, 5, 600, '单账号最长运行分钟数');
     if (body.instance !== undefined) s.instance = String(body.instance).trim() || DEFAULT_SETTINGS.instance;
     state.settings = s;
     save();

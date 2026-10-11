@@ -7,8 +7,13 @@ at <http://127.0.0.1:30019/>.
 - **Where the game runs.** A persistent pool instance (`arknights`, 16 GB, 8 CPUs) holds MuMu
   (Android 15, 1280×720, nested KVM, software rendering), the official and Bilibili clients, MAA
   (`C:\maa\MAA`) and an embedded Python (`C:\maa\python`).
-- **A run.** At each configured time of day (or from the page) the service boots the instance if it
-  is off, starts MuMu in the desktop session, copies `guest/runner.py` and the job in, and streams the
+- **When it runs.** While the desktop is idle: a private `hypridle` instance on the owner's Hyprland
+  session reports no input for the configured minutes (idle inhibitors such as a playing video keep it
+  from counting as idle). The run takes the accounts that are due: not successful since the CN daily
+  reset (04:00 UTC+8) or for the configured hours, and not inside the retry delay after a failure.
+  Input during an idle run stops it; the accounts it did not finish are marked yielded and stay due.
+  A run can also be started from the page; that one is not stopped by input.
+- **A run.** The service boots the instance if it is off, starts MuMu in the desktop session, copies `guest/runner.py` and the job in, and streams the
   runner over SSH. The runner drives MaaCore through MAA's Python binding: for each enabled account in
   list order, `StartUp` (switching to the account by its login name) and the account's tasks (Fight,
   Recruit, Infrast, Mall, Award), reporting every event as a `@@ {json}` line. Afterwards the service

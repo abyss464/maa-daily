@@ -90,6 +90,7 @@ th.num { text-align: right; }
 .chip { display: inline-block; font: 11px var(--mono); padding: 1px 7px; border: 1px solid var(--line2); color: var(--dim); margin: 1px 4px 1px 0; white-space: nowrap; }
 .chip.ok { border-color: rgba(79,191,122,.5); color: var(--good); }
 .chip.partial, .chip.running { border-color: rgba(245,197,66,.5); color: var(--warn); }
+.chip.yielded { border-color: rgba(43,179,230,.5); color: var(--accent); }
 .chip.failed, .chip.interrupted { border-color: rgba(229,83,75,.5); color: var(--bad); }
 
 /* accounts */
@@ -128,11 +129,6 @@ details summary { cursor: pointer; color: var(--dim); font-size: 12px; }
 @media (max-width: 640px) { .run { grid-template-columns: 1fr auto; } .run .accs { grid-column: 1 / -1; } }
 pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space: pre-wrap; word-break: break-all; max-height: 60vh; overflow: auto; background: #0a0b0d; color: #c9c6bf; }
 
-.times { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.time-chip { display: inline-flex; align-items: center; border: 1px solid var(--line2); background: var(--bg); }
-.time-chip span { font-family: var(--mono); padding: 4px 4px 4px 10px; }
-.time-chip button { background: none; border: 0; color: var(--faint); cursor: pointer; padding: 4px 8px; }
-.time-chip button:hover { color: var(--bad); }
 
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--accent); padding: 10px 14px; max-width: min(420px, calc(100vw - 32px)); z-index: 10; }
 .toast.bad { border-left-color: var(--bad); }
@@ -157,6 +153,7 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
   <div class="strip">
     <div class="cell"><div class="label">Windows</div><div class="val" id="s-guest">—</div></div>
     <div class="cell"><div class="label">当前</div><div class="val" id="s-busy">—</div></div>
+    <div class="cell"><div class="label">电脑</div><div class="val" id="s-idle">—</div></div>
     <div class="cell"><div class="label">下次运行</div><div class="val" id="s-next">—</div></div>
     <div class="cell"><div class="label">启用账号</div><div class="val" id="s-acc">—</div></div>
   </div>
@@ -241,14 +238,15 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
   <!-- settings -->
   <section id="tab-settings" class="hide stack">
     <div class="panel">
-      <div class="ph"><h2>定时</h2><span class="sub">SCHEDULE</span></div>
+      <div class="ph"><h2>闲时运行</h2><span class="sub">IDLE</span></div>
       <div class="pb form" style="padding-top:16px">
-        <label class="check"><input type="checkbox" id="st-enabled"> 按时自动运行</label>
-        <div class="field"><span>每天运行的时间（本机时间）</span>
-          <div class="times" id="st-times"></div>
-          <div class="times"><input type="time" id="st-newtime" style="width:130px"><button class="btn sm" id="st-addtime">添加时间</button></div>
-          <small>理智约 13 小时回满，一天两次可以基本不溢出。游戏每天 04:00 刷新日常。</small>
+        <label class="check"><input type="checkbox" id="st-enabled"> 电脑空闲时自动运行待运行的账号</label>
+        <div class="row">
+          <label class="field"><span>空闲多久算空闲（分钟）</span><input type="number" id="st-idle" min="1" max="240"><small>没有键盘鼠标操作；播放视频等阻止休眠的程序运行时不算空闲</small></label>
+          <label class="field"><span>同一账号两次运行至少间隔（小时）</span><input type="number" id="st-interval" min="1" max="48"><small>每天 04:00（北京时间）刷新后会再运行一次；理智约 13 小时回满</small></label>
+          <label class="field"><span>失败后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"></label>
         </div>
+        <label class="check"><input type="checkbox" id="st-yield"> 有人开始用电脑时立即停止，没做完的账号下次空闲时继续</label>
         <label class="check"><input type="checkbox" id="st-shutdown"> 运行结束后关闭模拟器和 Windows（只在本次运行开机时才关）</label>
         <label class="check"><input type="checkbox" id="st-close"> 最后一个账号完成后关闭游戏</label>
         <div class="row">
@@ -266,7 +264,8 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
 <script>
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const STATUS = { running: '运行中', ok: '成功', partial: '部分成功', failed: '失败', stopped: '已停止', interrupted: '被中断', skipped: '跳过', pending: '等待' };
+const STATUS = { running: '运行中', ok: '成功', partial: '部分成功', failed: '失败', stopped: '已停止', yielded: '已让出', interrupted: '被中断', skipped: '跳过', pending: '等待' };
+const TRIGGER = { idle: '闲时', manual: '手动', schedule: '定时' };
 const GUEST = { ready: '运行中', stopped: '已关机', starting: '开机中', stopping: '关机中', unreachable: '无响应', preparing: '准备中' };
 const CLIENT = { Official: '官服', Bilibili: 'B 服' };
 const TASKS = { Fight: '理智作战', Recruit: '公开招募', Infrast: '基建换班', Mall: '信用商店', Award: '领取奖励' };
@@ -310,7 +309,12 @@ async function refresh() {
   const gs = !g.exists ? (g.error || '找不到虚拟机') : (GUEST[g.status] || g.status);
   $('#s-guest').innerHTML = `<span class="dot ${g.status === 'ready' ? 'good' : ['starting', 'stopping', 'preparing'].includes(g.status) ? 'busy' : g.exists ? '' : 'bad'}"></span>${esc(gs)}`;
   $('#s-busy').innerHTML = S.busy ? `<span class="dot busy"></span>${esc(S.busy.stage || S.busy.label)}` : '<span class="dot"></span>空闲';
-  $('#s-next').textContent = S.settings.enabled ? fmt(S.nextRun) : '自动运行已关闭';
+  const id = S.idle;
+  $('#s-idle').innerHTML = !id.available ? `<span class="dot bad"></span>${esc(id.error || '无法检测空闲')}`
+    : id.idle ? `<span class="dot good"></span>空闲（${fmt(id.since)} 起）` : '<span class="dot"></span>使用中';
+  const dueN = S.accounts.filter((a) => S.due[a.id]?.due).length;
+  $('#s-next').textContent = !S.settings.enabled ? '自动运行已关闭'
+    : S.nextDue === 'now' ? `${dueN} 个账号待运行，空闲 ${S.settings.idleMinutes} 分钟后开始` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
   $('#s-acc').textContent = `${S.accounts.filter((a) => a.enabled).length} / ${S.accounts.length}`;
   const busy = Boolean(S.busy);
   $('#b-run').disabled = busy || !S.accounts.some((a) => a.enabled);
@@ -369,7 +373,7 @@ function runRow(r) {
   const accs = (r.order || Object.keys(r.accounts)).map((id) => r.accounts[id]).filter(Boolean)
     .map((a) => `<span class="chip ${a.status}">${esc(a.name)} · ${STATUS[a.status] || a.status}${a.battles ? ` · ${a.battles} 战` : ''}</span>`).join('');
   return `<div class="run" data-id="${esc(r.id)}"><span class="t">${fmt(r.startedAt)}</span><span class="chip ${r.status}">${STATUS[r.status] || r.status}</span>` +
-    `<span class="hint">${r.trigger === 'schedule' ? '定时' : '手动'}${r.endedAt ? ` · ${dur(r.startedAt, r.endedAt)}` : ''}</span>` +
+    `<span class="hint">${TRIGGER[r.trigger] || r.trigger}${r.endedAt ? ` · ${dur(r.startedAt, r.endedAt)}` : ''}</span>` +
     `<span class="accs">${accs}${r.error ? `<span class="err"> ${esc(r.error)}</span>` : ''}</span></div>`;
 }
 async function loadRecent() {
@@ -442,11 +446,14 @@ function renderAccounts() {
   if (!S.accounts.length) { el.innerHTML = '<div class="empty">还没有账号，点「添加账号」</div>'; return; }
   el.innerHTML = S.accounts.map((a, i) => {
     const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => TASKS[k] || k);
+    const d = S.due?.[a.id] || {};
+    const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
+      : d.retryAt ? ` · 上次失败，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
     return `<div class="acc ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
       <div class="acc-head">
         <label class="check" title="参与定时运行"><input type="checkbox" data-act="toggle" ${a.enabled ? 'checked' : ''}></label>
         <span class="name">${esc(a.name)}</span>
-        <span class="meta">${CLIENT[a.client_type] || a.client_type}${a.account_name ? ` · ${esc(a.account_name)}` : ' · 不切换账号'} · ${on.join('、') || '无任务'}</span>
+        <span class="meta">${CLIENT[a.client_type] || a.client_type}${a.account_name ? ` · ${esc(a.account_name)}` : ' · 不切换账号'} · ${on.join('、') || '无任务'}${when}</span>
         <span class="right">
           <button class="btn sm" data-act="up" ${i ? '' : 'disabled'} title="上移">↑</button>
           <button class="btn sm" data-act="down" ${i < S.accounts.length - 1 ? '' : 'disabled'} title="下移">↓</button>
@@ -516,22 +523,18 @@ $('#b-prepare').onclick = act(async () => {
 $('#b-shutdown').onclick = act(async () => { if (!confirm('关闭模拟器和 Windows？')) return; await api('POST', '/api/shutdown'); refresh(); });
 
 // ---- settings ----
-let times = [];
-function drawTimes() {
-  $('#st-times').innerHTML = times.length ? times.map((t, i) => `<span class="time-chip"><span>${t}</span><button data-i="${i}" title="删除">×</button></span>`).join('') : '<span class="hint">没有设置时间</span>';
-}
 function fillSettings() {
   if (!S) return;
   const s = S.settings;
   $('#st-enabled').checked = s.enabled; $('#st-shutdown').checked = s.shutdownAfter; $('#st-close').checked = s.closeGame;
   $('#st-timeout').value = s.accountTimeoutMin; $('#st-instance').value = s.instance;
-  times = [...s.times]; drawTimes(); $('#st-err').textContent = '';
+  $('#st-idle').value = s.idleMinutes; $('#st-interval').value = s.intervalHours; $('#st-retry').value = s.retryMinutes; $('#st-yield').checked = s.stopWhenActive;
+  $('#st-err').textContent = '';
 }
-$('#st-times').onclick = (e) => { if (e.target.dataset.i) { times.splice(Number(e.target.dataset.i), 1); drawTimes(); } };
-$('#st-addtime').onclick = () => { const v = $('#st-newtime').value; if (v && !times.includes(v)) { times.push(v); times.sort(); drawTimes(); } };
 $('#st-save').onclick = act(async () => {
   try {
-    await api('PUT', '/api/settings', { enabled: $('#st-enabled').checked, times, shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
+    await api('PUT', '/api/settings', { enabled: $('#st-enabled').checked, idleMinutes: Number($('#st-idle').value), intervalHours: Number($('#st-interval').value),
+      retryMinutes: Number($('#st-retry').value), stopWhenActive: $('#st-yield').checked, shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
       accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value });
   } catch (e) { $('#st-err').textContent = e.message; return; }
   toast('设置已保存'); await refresh(); fillSettings();

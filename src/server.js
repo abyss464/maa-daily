@@ -1,8 +1,9 @@
 // HTTP interface and web page of maa-daily, on 127.0.0.1 only.
 //
 //   GET    /                          the web page
-//   GET    /api/state                 settings, accounts, what is running, the guest, next run
-//   PUT    /api/settings              {enabled, times, shutdownAfter, closeGame, accountTimeoutMin, instance}
+//   GET    /api/state                 settings, accounts and whether each is due, idleness, what is running, the guest
+//   PUT    /api/settings              {enabled, idleMinutes, intervalHours, retryMinutes, stopWhenActive,
+//                                      shutdownAfter, closeGame, accountTimeoutMin, instance}
 //   POST   /api/accounts              add {name, client_type, account_name, enabled, note, tasks}
 //   PUT    /api/accounts/:id          change any of those
 //   DELETE /api/accounts/:id
@@ -23,7 +24,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { store, runs, defaultTasks, InputError } from './store.js';
 import { orchestrator } from './orchestrator.js';
-import { startScheduler, nextRun } from './scheduler.js';
+import { startScheduler, idle, accountStatus, nextDue } from './scheduler.js';
 import { stats } from './stats.js';
 import { vm } from './vm.js';
 
@@ -86,7 +87,7 @@ async function route(req, res, url) {
   if (m === 'GET' && a === 'state') {
     return send(res, 200, {
       settings: store.settings(), accounts: store.accounts(), busy: orchestrator.busy(),
-      notice: orchestrator.lastNotice || null, guest: await guest(), nextRun: nextRun(),
+      notice: orchestrator.lastNotice || null, guest: await guest(), idle, due: accountStatus(), nextDue: nextDue(),
     });
   }
   if (m === 'PUT' && a === 'settings') return send(res, 200, store.updateSettings(await readJson(req)));
