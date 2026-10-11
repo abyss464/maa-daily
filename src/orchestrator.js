@@ -128,7 +128,7 @@ class Orchestrator {
         run.status = 'failed';
         run.error = fatal || 'MAA 意外退出';
       } else {
-        run.status = results.every((r) => r.status === 'ok') ? 'ok' : results.some((r) => r.status === 'ok') ? 'partial' : 'failed';
+        run.status = results.every((r) => r.status === 'ok') ? 'ok' : results.some((r) => ['ok', 'partial'].includes(r.status)) ? 'partial' : 'failed';
       }
       for (const r of results) if (r.status === 'pending' || r.status === 'running') r.status = r.status === 'running' ? 'failed' : 'skipped';
     } catch (e) {
@@ -172,12 +172,14 @@ class Orchestrator {
           this.stage(`MAA 运行中：${acc.name}`);
           this.log(run.id, '开始', who);
         } else {
-          acc.status = ev.ok ? 'ok' : 'failed';
           acc.chains = ev.chains || acc.chains;
+          // Some tasks done after a successful start is partial: the day's work is mostly in.
+          const doneAny = Object.entries(acc.chains).some(([c, st]) => c !== 'StartUp' && c !== 'CloseDown' && st === 'done');
+          acc.status = ev.ok ? 'ok' : acc.chains.StartUp === 'done' && doneAny ? 'partial' : 'failed';
           acc.seconds = ev.seconds || 0;
           if (ev.timed_out) acc.timedOut = true;
           const bad = Object.entries(acc.chains).filter(([, s]) => s !== 'done').map(([c, s]) => `${CHAINS[c] || c}${CHAIN_STATE[s] || s}`);
-          this.log(run.id, `完成：${ev.ok ? '成功' : '有失败'}，用时 ${Math.round(acc.seconds / 60)} 分钟${bad.length ? `（${bad.join('、')}）` : ''}`, who);
+          this.log(run.id, `完成：${STATUS[acc.status]}，用时 ${Math.round(acc.seconds / 60)} 分钟${bad.length ? `（${bad.join('、')}）` : ''}`, who);
         }
         break;
       case 'chain':

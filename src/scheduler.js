@@ -32,10 +32,13 @@ export function accountStatus(now = Date.now()) {
     for (const [id, a] of Object.entries(r.accounts || {})) {
       const at = Date.parse(r.endedAt || r.startedAt);
       const st = (seen[id] ||= { lastOk: null, lastAttempt: null, lastStatus: null });
-      if (a.status === 'ok' && (!st.lastOk || at > st.lastOk)) st.lastOk = at;
-      if (['ok', 'failed'].includes(a.status) && (!st.lastAttempt || at > st.lastAttempt)) {
+      // A partial result (started, some tasks done) counts as done for scheduling: retrying it
+      // would only repeat the tasks that already succeeded.
+      const okish = a.status === 'ok' || a.status === 'partial';
+      if (okish && (!st.lastOk || at > st.lastOk)) st.lastOk = at;
+      if ((okish || a.status === 'failed') && (!st.lastAttempt || at > st.lastAttempt)) {
         st.lastAttempt = at;
-        st.lastStatus = a.status;
+        st.lastStatus = okish ? 'ok' : 'failed';
       }
     }
   }
