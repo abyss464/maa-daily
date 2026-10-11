@@ -26,8 +26,12 @@ def emit(ev, **data):
         sys.stdout.flush()
 
 
+# The account being run, so log lines from MAA's callback carry it.
+CURRENT = {"id": None, "chains": {}}
+
+
 def log(msg, level="info"):
-    emit("log", level=level, msg=msg)
+    emit("log", level=level, msg=msg, account=CURRENT["id"])
 
 
 def wait_boot(adb, address, timeout):
@@ -60,6 +64,35 @@ def fetch_ota_tasks(maa_dir):
     return os.path.join(maa_dir, "cache") if os.path.exists(path) else None
 
 
+# Android package of each client.
+PACKAGES = {"Official": "com.hypergryph.arknights", "Bilibili": "com.hypergryph.arknights.bilibili"}
+
+
+def adb_shell(adb, address, *cmd):
+    return subprocess.run([adb, "-s", address, "shell", *cmd], capture_output=True, text=True, timeout=60).stdout.strip()
+
+
+def ensure_game(adb, address, client):
+    """Starts the account's client unless it is already running, and stops the other client.
+
+    MAA's own start (two `am start` calls in quick succession) leaves a cold-started client on
+    the launcher in this emulator; one launcher intent brings it up reliably.
+    """
+    pkg = PACKAGES.get(client, PACKAGES["Official"])
+    for other in PACKAGES.values():
+        if other != pkg and adb_shell(adb, address, "pidof", other):
+            adb_shell(adb, address, "am", "force-stop", other)
+    if adb_shell(adb, address, "pidof", pkg):
+        return True
+    log("启动游戏")
+    adb_shell(adb, address, "monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1")
+    for _ in range(30):
+        time.sleep(2)
+        if adb_shell(adb, address, "pidof", pkg):
+            return True
+    return False
+
+
 # The task chains an account may enable, in the order MAA runs them.
 ORDER = ["Fight", "Recruit", "Infrast", "Mall", "Award"]
 
@@ -68,7 +101,7 @@ def build_tasks(acc):
     """MAA task list of one account: StartUp first, then its enabled tasks."""
     client = acc.get("client_type") or "Official"
     t = acc.get("tasks") or {}
-    tasks = [("StartUp", {"client_type": client, "start_game_enabled": True,
+    tasks = [("StartUp", {"client_type": client, "start_game_enabled": False,
                           **({"account_name": acc["account_name"]} if acc.get("account_name") else {})})]
     for name in ORDER:
         p = t.get(name)
@@ -103,7 +136,7 @@ def main():
         emit("fatal", msg="MAA 资源加载失败")
         return 2
 
-    current = {"id": None, "chains": {}}
+    current = CURRENT
 
     @Asst.CallBackType
     def callback(msg, details, arg):
@@ -147,8 +180,8 @@ def main():
                 emit("medicine", account=acc, count=det.get("count"), expiring=det.get("is_expiring"))
             elif what == "StoneConfirm" or what == "UseStone":
                 emit("stone", account=acc, count=det.get("count"))
-            elif what == "FightTimes":
-                log(f"作战：第 {det.get('times_finished', '?')} 次")
+            elif what == "FightTimes" and det.get("times_finished"):
+                log(f"作战：已完成 {det.get('times_finished')} 次")
             elif what == "SanityBeforeStage":
                 emit("sanity", account=acc, current=det.get("current_sanity"), max=det.get("max_sanity"))
 
@@ -164,6 +197,8 @@ def main():
     for i, acc in enumerate(accounts):
         current["id"], current["chains"] = acc["id"], {}
         emit("account", account=acc["id"], phase="start", name=acc.get("name"))
+        if not ensure_game(adb, address, acc.get("client_type") or "Official"):
+            log("游戏没有启动起来", "error")
         tasks = build_tasks(acc)
         for name, params in tasks:
             asst.append_task(name, params)
