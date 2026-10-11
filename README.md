@@ -1,6 +1,6 @@
 # maa-daily
 
-Arknights dailies for several accounts, run on a schedule by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
+Arknights dailies for several accounts, run while the computer is idle by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
 inside a Windows machine from the local [windows pool](../windows-pool), and managed from a web page
 at <http://127.0.0.1:30019/>.
 
