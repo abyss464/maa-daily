@@ -1,21 +1,21 @@
-// Runs the due accounts while the desktop is idle. Idleness comes from a private hypridle
-// instance on the owner's Hyprland session (ext-idle-notify: no input for the configured
-// minutes, and no idle inhibitor such as a playing video). Input during an idle run ends it
-// when the settings say so; the accounts it did not finish stay due for the next idle spell.
+// Runs the due accounts while the computer is idle, judged by load rather than input: every
+// 10 s it samples the CPU share of everything except the Windows guest (the guest container's
+// cgroup is subtracted, so a run never counts against itself), the busiest GPU, and the memory
+// the guest has or could get. Idle means all of them stayed within the limits for the
+// configured minutes; an idle run is stopped when the load stays above them for two minutes,
+// and the accounts it did not finish stay due.
 
 import fs from 'node:fs';
-import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
-import { config } from './config.js';
+import { execFile } from 'node:child_process';
 import { store, runs } from './store.js';
 import { orchestrator } from './orchestrator.js';
+import { vm } from './vm.js';
 
-const MARK = '@@maa-daily';
-const CONF = path.join(config.dataDir, 'hypridle.conf');
+const SAMPLE_MS = 10_000;
+const BUSY_MS = 2 * 60_000;
 
-export const idle = { idle: false, since: null, available: false, error: null };
-let child = null;
-let childMinutes = null;
+export const idle = { idle: false, since: null, available: false, error: null, cpu: null, gpu: null, memFreeGb: null, reasons: [] };
+const samples = []; // { t, cpu, gpu, memFree (bytes the guest has or could get), memAvail }
 
 // The most recent daily reset of the CN servers: 04:00 UTC+8.
 export function lastReset(now = Date.now()) {
@@ -58,82 +58,133 @@ export function accountStatus(now = Date.now()) {
 
 const dueIds = () => Object.entries(accountStatus()).filter(([, v]) => v.due).map(([id]) => id);
 
-function onIdle() {
-  idle.idle = true;
-  idle.since = new Date().toISOString();
-  tick();
+// ---- load sampling ----
+
+let prevStat = null;
+let prevGuest = null;
+let guestCgroup = null; // cgroup directory of the guest's container, or null when it is off
+let guestRamGb = 16; // the guest's memory size, from the pool
+
+function cpuTotals() {
+  const f = fs.readFileSync('/proc/stat', 'utf8').split('\n')[0].trim().split(/\s+/).slice(1).map(Number);
+  const total = f.reduce((a, b) => a + b, 0);
+  return { total, idle: f[3] + (f[4] || 0) };
 }
 
-function onActive() {
-  idle.idle = false;
-  idle.since = new Date().toISOString();
-  const b = orchestrator.busy();
-  if (b?.kind === 'run' && b.trigger === 'idle' && !b.stopping && store.settings().stopWhenActive) {
-    orchestrator.stop('yield');
+function readGpu() {
+  let best = null;
+  for (const card of fs.readdirSync('/sys/class/drm').filter((n) => /^card\d+$/.test(n))) {
+    try {
+      const v = Number(fs.readFileSync(`/sys/class/drm/${card}/device/gpu_busy_percent`, 'utf8'));
+      if (Number.isFinite(v)) best = Math.max(best ?? 0, v);
+    } catch {}
+  }
+  return best;
+}
+
+function memInfo() {
+  const t = fs.readFileSync('/proc/meminfo', 'utf8');
+  return Number(/MemAvailable:\s+(\d+)/.exec(t)[1]) * 1024;
+}
+
+function readCgroup(file) {
+  try {
+    return fs.readFileSync(`${guestCgroup}/${file}`, 'utf8');
+  } catch {
+    return null;
   }
 }
 
-// The session environment of the owner's desktop, as systemd holds it now (Hyprland may have
-// restarted since this service started).
-function sessionEnv() {
-  const env = { ...process.env };
+// Finds the guest container's cgroup (it changes when the guest is booted again).
+async function locateGuest() {
   try {
-    for (const line of execFileSync('systemctl', ['--user', 'show-environment'], { encoding: 'utf8' }).split('\n')) {
-      const m = /^(WAYLAND_DISPLAY|XDG_RUNTIME_DIR|HYPRLAND_INSTANCE_SIGNATURE)=(.*)$/.exec(line);
-      if (m) env[m[1]] = m[2];
-    }
-  } catch {}
-  return env;
+    const inst = await vm.status(store.settings().instance);
+    if (inst?.ram_gb) guestRamGb = inst.ram_gb;
+    if (!inst || inst.status === 'stopped') return (guestCgroup = null);
+    const id = await new Promise((resolve) => execFile('docker', ['inspect', '-f', '{{.Id}}', `windows-pool-${inst.id}`],
+      { timeout: 10_000 }, (err, out) => resolve(err ? null : out.trim())));
+    const dir = id && `/sys/fs/cgroup/system.slice/docker-${id}.scope`;
+    guestCgroup = dir && fs.existsSync(dir) ? dir : null;
+  } catch {
+    guestCgroup = null;
+  }
+  return guestCgroup;
 }
 
-function startWatcher() {
-  const minutes = store.settings().idleMinutes;
-  fs.writeFileSync(CONF, `general {\n    ignore_dbus_inhibit = false\n}\n\nlistener {\n    timeout = ${minutes * 60}\n` +
-    `    on-timeout = echo ${MARK}-idle\n    on-resume = echo ${MARK}-active\n}\n`);
-  childMinutes = minutes;
-  idle.idle = false;
-  const p = spawn('hypridle', ['-c', CONF], { env: sessionEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
-  child = p;
-  let buf = '';
-  p.stdout.on('data', (c) => {
-    buf += c.toString();
-    let i;
-    while ((i = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, i).trim();
-      buf = buf.slice(i + 1);
-      if (line === `${MARK}-idle`) onIdle();
-      else if (line === `${MARK}-active`) onActive();
-    }
-  });
-  p.stderr.on('data', () => {});
-  p.on('spawn', () => {
-    idle.available = true;
-    idle.error = null;
-  });
-  p.on('error', (e) => {
-    idle.available = false;
-    idle.error = `无法检测空闲：${e.message}`;
-  });
-  p.on('exit', (code) => {
-    if (child !== p) return;
-    child = null;
-    idle.available = false;
-    idle.idle = false;
-    idle.error ||= `空闲检测退出（${code}），稍后重试`;
-    setTimeout(startWatcher, 30_000);
-  });
+async function sample() {
+  if (guestCgroup && !fs.existsSync(guestCgroup)) guestCgroup = null;
+  if (!guestCgroup) await locateGuest();
+  const stat = cpuTotals();
+  const guestUsec = guestCgroup ? Number(/usage_usec (\d+)/.exec(readCgroup('cpu.stat') || '')?.[1] || 0) : 0;
+  const guestMem = guestCgroup ? Number(readCgroup('memory.current') || 0) : 0;
+  const memAvail = memInfo();
+  const gpu = readGpu();
+  if (prevStat && stat.total > prevStat.total) {
+    const ticks = stat.total - prevStat.total;
+    const busyTicks = ticks - (stat.idle - prevStat.idle);
+    const hz = 100; // USER_HZ
+    const guestTicks = prevGuest !== null && guestUsec >= prevGuest ? ((guestUsec - prevGuest) / 1e6) * hz : 0;
+    const cpu = Math.max(0, Math.min(100, ((busyTicks - guestTicks) / ticks) * 100));
+    samples.push({ t: Date.now(), cpu, gpu, memFree: memAvail + guestMem, memAvail });
+  }
+  prevStat = stat;
+  prevGuest = guestCgroup ? guestUsec : null;
+  const keep = Date.now() - Math.max(store.settings().idleMinutes * 60_000, BUSY_MS) - SAMPLE_MS;
+  while (samples.length && samples[0].t < keep) samples.shift();
+  idle.available = true;
+  judge();
+}
+
+const avg = (list, k) => {
+  const v = list.map((x) => x[k]).filter((x) => x !== null && x !== undefined);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+};
+
+// Whether the samples of the last `ms` are within the limits, with the reasons they are not.
+function within(ms) {
+  const s = store.settings();
+  const win = samples.filter((x) => x.t >= Date.now() - ms);
+  const reasons = [];
+  if (!win.length || win[0].t > Date.now() - ms + 2 * SAMPLE_MS) reasons.push('采样时间不足');
+  const cpu = avg(win, 'cpu');
+  const gpu = avg(win, 'gpu');
+  const memFree = win.length ? Math.min(...win.map((x) => x.memFree)) : null;
+  const need = (guestRamGb + s.memMarginGb) * 2 ** 30;
+  if (cpu !== null && cpu > s.cpuMax) reasons.push(`CPU ${cpu.toFixed(0)}% > ${s.cpuMax}%`);
+  if (gpu !== null && gpu > s.gpuMax) reasons.push(`GPU ${gpu.toFixed(0)}% > ${s.gpuMax}%`);
+  if (memFree !== null && memFree < need) reasons.push(`可用内存 ${(memFree / 2 ** 30).toFixed(0)} GB 不足`);
+  return { ok: !reasons.length, reasons, cpu, gpu, memFree };
+}
+
+function judge() {
+  const s = store.settings();
+  const last = samples.at(-1);
+  if (last) {
+    idle.cpu = Math.round(last.cpu);
+    idle.gpu = last.gpu;
+    idle.memFreeGb = Math.round(last.memFree / 2 ** 30);
+  }
+  const w = within(s.idleMinutes * 60_000);
+  if (w.ok !== idle.idle) {
+    idle.idle = w.ok;
+    idle.since = new Date().toISOString();
+  }
+  idle.reasons = w.reasons;
+  if (idle.idle) return tick();
+
+  // An idle run yields once the load has stayed above the limits for two minutes (or memory
+  // is about to run out); a short spike does not stop it.
+  const b = orchestrator.busy();
+  if (b?.kind !== 'run' || b.trigger !== 'idle' || b.stopping || !s.stopWhenBusy) return;
+  const recent = samples.filter((x) => x.t >= Date.now() - BUSY_MS);
+  const lowMem = last && last.memAvail < 2 * 2 ** 30;
+  const busyAll = recent.length >= BUSY_MS / SAMPLE_MS - 1 && recent.every((x) =>
+    x.cpu > s.cpuMax || (x.gpu !== null && x.gpu > s.gpuMax));
+  if (lowMem || busyAll) orchestrator.stop('yield');
 }
 
 function tick() {
   const s = store.settings();
-  // A change of the idle minutes takes a new watcher.
-  if (child && childMinutes !== s.idleMinutes) {
-    const old = child;
-    child = null;
-    old.kill();
-    startWatcher();
-    return;
-  }
   if (!s.enabled || !idle.idle || orchestrator.busy()) return;
   const ids = dueIds();
   if (!ids.length) return;
@@ -143,10 +194,11 @@ function tick() {
 }
 
 export function startScheduler() {
-  startWatcher();
-  setInterval(tick, 30_000);
-  process.on('exit', () => child?.kill());
-  for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => process.exit(0));
+  const loop = () => sample().catch((e) => {
+    idle.available = false;
+    idle.error = `无法读取负载：${e.message}`;
+  }).finally(() => setTimeout(loop, SAMPLE_MS));
+  loop();
 }
 
 // When the next idle run could start: now if accounts are due, else the earliest time one

@@ -1,18 +1,21 @@
 # maa-daily
 
-Arknights dailies for several accounts, run while the computer is idle by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
+Arknights dailies for several accounts, run while the computer is idle (by CPU, GPU and memory load) by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
 inside a Windows machine from the local [windows pool](../windows-pool), and managed from a web page
 at <http://127.0.0.1:30019/>.
 
 - **Where the game runs.** A persistent pool instance (`arknights`, 16 GB, 8 CPUs) holds MuMu
   (Android 15, 1280×720, nested KVM, software rendering), the official and Bilibili clients, MAA
   (`C:\maa\MAA`) and an embedded Python (`C:\maa\python`).
-- **When it runs.** While the desktop is idle: a private `hypridle` instance on the owner's Hyprland
-  session reports no input for the configured minutes (idle inhibitors such as a playing video keep it
-  from counting as idle). The run takes the accounts that are due: not successful since the CN daily
-  reset (04:00 UTC+8) or for the configured hours, and not inside the retry delay after a failure.
-  Input during an idle run stops it; the accounts it did not finish are marked yielded and stay due.
-  A run can also be started from the page; that one is not stopped by input.
+- **When it runs.** While the computer is idle by load, not by input: every 10 s the service samples
+  the CPU share of everything except the Windows guest (the guest container's cgroup usage is
+  subtracted, so a run never counts against itself), the busiest GPU (`gpu_busy_percent`), and the
+  memory the guest has or could get. Idle means the averages over the configured minutes stay within
+  the limits (default CPU 35 %, GPU 40 %, guest RAM + 8 GB free, 5 minutes). The run takes the accounts
+  that are due: not successful since the CN daily reset (04:00 UTC+8) or for the configured hours, and
+  not inside the retry delay after a failure. Load above the limits for two minutes (or less than
+  2 GB of memory left) stops an idle run; the accounts it did not finish are marked yielded and stay
+  due. A run started from the page is not stopped by load.
 - **A run.** The service boots the instance if it is off, starts MuMu in the desktop session, copies `guest/runner.py` and the job in, and streams the
   runner over SSH. The runner drives MaaCore through MAA's Python binding: for each enabled account in
   list order, `StartUp` (switching to the account by its login name) and the account's tasks (Fight,

@@ -13,15 +13,20 @@ const RUNS = path.join(config.dataDir, 'runs');
 
 export const DEFAULT_SETTINGS = {
   enabled: true,
-  // A run starts on its own once the desktop has had no input (and no idle inhibitor, such as
-  // a playing video) for this many minutes, for the accounts that are due.
-  idleMinutes: 10,
+  // A run starts on its own for the accounts that are due once the computer has been idle for
+  // this many minutes: the load of everything but the Windows guest itself stays under these
+  // limits (CPU as a share of all cores, the busiest GPU), and the guest's memory plus a margin
+  // is free.
+  idleMinutes: 5,
+  cpuMax: 35,
+  gpuMax: 40,
+  memMarginGb: 8,
   // An account is due when it has not succeeded since the daily reset, or for this many hours.
   intervalHours: 10,
   // After a failed attempt an account waits this long before the next idle run tries it again.
   retryMinutes: 60,
-  // Input on the desktop ends an idle run; the accounts it did not finish stay due.
-  stopWhenActive: true,
+  // Load above the limits for two minutes ends an idle run; the accounts it did not finish stay due.
+  stopWhenBusy: true,
   instance: 'arknights',
   // Shut the emulator and Windows down after a run, when the run was what started Windows.
   shutdownAfter: true,
@@ -58,7 +63,9 @@ function load() {
   try {
     const s = JSON.parse(fs.readFileSync(STATE, 'utf8'));
     const settings = { ...DEFAULT_SETTINGS, ...s.settings };
+    if (settings.stopWhenActive !== undefined) settings.stopWhenBusy = settings.stopWhenActive;
     delete settings.times;
+    delete settings.stopWhenActive;
     return { settings, accounts: s.accounts || [] };
   } catch {
     return { settings: { ...DEFAULT_SETTINGS }, accounts: [] };
@@ -112,9 +119,12 @@ export const store = {
     const s = { ...state.settings };
     if (body.enabled !== undefined) s.enabled = Boolean(body.enabled);
     if (body.idleMinutes !== undefined) s.idleMinutes = intIn(body.idleMinutes, 1, 240, '空闲分钟数');
+    if (body.cpuMax !== undefined) s.cpuMax = intIn(body.cpuMax, 1, 100, 'CPU 上限');
+    if (body.gpuMax !== undefined) s.gpuMax = intIn(body.gpuMax, 1, 100, 'GPU 上限');
+    if (body.memMarginGb !== undefined) s.memMarginGb = intIn(body.memMarginGb, 0, 256, '内存余量');
     if (body.intervalHours !== undefined) s.intervalHours = intIn(body.intervalHours, 1, 48, '间隔小时数');
     if (body.retryMinutes !== undefined) s.retryMinutes = intIn(body.retryMinutes, 5, 1440, '失败重试分钟数');
-    if (body.stopWhenActive !== undefined) s.stopWhenActive = Boolean(body.stopWhenActive);
+    if (body.stopWhenBusy !== undefined) s.stopWhenBusy = Boolean(body.stopWhenBusy);
     if (body.shutdownAfter !== undefined) s.shutdownAfter = Boolean(body.shutdownAfter);
     if (body.closeGame !== undefined) s.closeGame = Boolean(body.closeGame);
     if (body.accountTimeoutMin !== undefined) s.accountTimeoutMin = intIn(body.accountTimeoutMin, 5, 600, '单账号最长运行分钟数');

@@ -242,11 +242,14 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
       <div class="pb form" style="padding-top:16px">
         <label class="check"><input type="checkbox" id="st-enabled"> 电脑空闲时自动运行待运行的账号</label>
         <div class="row">
-          <label class="field"><span>空闲多久算空闲（分钟）</span><input type="number" id="st-idle" min="1" max="240"><small>没有键盘鼠标操作；播放视频等阻止休眠的程序运行时不算空闲</small></label>
+          <label class="field"><span>CPU 占用不超过（%）</span><input type="number" id="st-cpu" min="1" max="100"><small>全部核心的平均值，不含 Windows 虚拟机自身</small></label>
+          <label class="field"><span>GPU 占用不超过（%）</span><input type="number" id="st-gpu" min="1" max="100"></label>
+          <label class="field"><span>虚拟机内存之外至少还空（GB）</span><input type="number" id="st-mem" min="0" max="256"></label>
+          <label class="field"><span>持续多久算空闲（分钟）</span><input type="number" id="st-idle" min="1" max="240"><small>以上条件在这段时间内的平均值都满足</small></label>
           <label class="field"><span>同一账号两次运行至少间隔（小时）</span><input type="number" id="st-interval" min="1" max="48"><small>每天 04:00（北京时间）刷新后会再运行一次；理智约 13 小时回满</small></label>
           <label class="field"><span>失败后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"></label>
         </div>
-        <label class="check"><input type="checkbox" id="st-yield"> 有人开始用电脑时立即停止，没做完的账号下次空闲时继续</label>
+        <label class="check"><input type="checkbox" id="st-yield"> 占用持续 2 分钟超过上限时停止闲时运行，没做完的账号下次空闲时继续</label>
         <label class="check"><input type="checkbox" id="st-shutdown"> 运行结束后关闭模拟器和 Windows（只在本次运行开机时才关）</label>
         <label class="check"><input type="checkbox" id="st-close"> 最后一个账号完成后关闭游戏</label>
         <div class="row">
@@ -310,11 +313,13 @@ async function refresh() {
   $('#s-guest').innerHTML = `<span class="dot ${g.status === 'ready' ? 'good' : ['starting', 'stopping', 'preparing'].includes(g.status) ? 'busy' : g.exists ? '' : 'bad'}"></span>${esc(gs)}`;
   $('#s-busy').innerHTML = S.busy ? `<span class="dot busy"></span>${esc(S.busy.stage || S.busy.label)}` : '<span class="dot"></span>空闲';
   const id = S.idle;
-  $('#s-idle').innerHTML = !id.available ? `<span class="dot bad"></span>${esc(id.error || '无法检测空闲')}`
-    : id.idle ? `<span class="dot good"></span>空闲（${fmt(id.since)} 起）` : '<span class="dot"></span>使用中';
+  const load = id.cpu === null ? '' : `CPU ${id.cpu}% · GPU ${id.gpu ?? '—'}% · 内存可用 ${id.memFreeGb} GB`;
+  $('#s-idle').innerHTML = !id.available ? `<span class="dot bad"></span>${esc(id.error || '无法读取负载')}`
+    : `<span class="dot ${id.idle ? 'good' : ''}"></span>${id.idle ? '空闲' : '忙'}　<span class="hint">${esc(load)}</span>`;
+  $('#s-idle').title = id.idle ? `${fmt(id.since)} 起空闲` : (id.reasons || []).join('；');
   const dueN = S.accounts.filter((a) => S.due[a.id]?.due).length;
   $('#s-next').textContent = !S.settings.enabled ? '自动运行已关闭'
-    : S.nextDue === 'now' ? `${dueN} 个账号待运行，空闲 ${S.settings.idleMinutes} 分钟后开始` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
+    : S.nextDue === 'now' ? `${dueN} 个账号待运行，${id.idle ? '即将开始' : `空闲 ${S.settings.idleMinutes} 分钟后开始`}` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
   $('#s-acc').textContent = `${S.accounts.filter((a) => a.enabled).length} / ${S.accounts.length}`;
   const busy = Boolean(S.busy);
   $('#b-run').disabled = busy || !S.accounts.some((a) => a.enabled);
@@ -532,13 +537,15 @@ function fillSettings() {
   const s = S.settings;
   $('#st-enabled').checked = s.enabled; $('#st-shutdown').checked = s.shutdownAfter; $('#st-close').checked = s.closeGame;
   $('#st-timeout').value = s.accountTimeoutMin; $('#st-instance').value = s.instance;
-  $('#st-idle').value = s.idleMinutes; $('#st-interval').value = s.intervalHours; $('#st-retry').value = s.retryMinutes; $('#st-yield').checked = s.stopWhenActive;
+  $('#st-idle').value = s.idleMinutes; $('#st-interval').value = s.intervalHours; $('#st-retry').value = s.retryMinutes; $('#st-yield').checked = s.stopWhenBusy;
+  $('#st-cpu').value = s.cpuMax; $('#st-gpu').value = s.gpuMax; $('#st-mem').value = s.memMarginGb;
   $('#st-err').textContent = '';
 }
 $('#st-save').onclick = act(async () => {
   try {
     await api('PUT', '/api/settings', { enabled: $('#st-enabled').checked, idleMinutes: Number($('#st-idle').value), intervalHours: Number($('#st-interval').value),
-      retryMinutes: Number($('#st-retry').value), stopWhenActive: $('#st-yield').checked, shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
+      retryMinutes: Number($('#st-retry').value), stopWhenBusy: $('#st-yield').checked,
+      cpuMax: Number($('#st-cpu').value), gpuMax: Number($('#st-gpu').value), memMarginGb: Number($('#st-mem').value), shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
       accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value });
   } catch (e) { $('#st-err').textContent = e.message; return; }
   toast('设置已保存'); await refresh(); fillSettings();
