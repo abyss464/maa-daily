@@ -16,7 +16,6 @@ export const config = {
 
   // The Windows pool and the persistent instance that holds MuMu, Arknights and MAA.
   poolUrl: env.WINDOWS_POOL_URL || 'http://127.0.0.1:30018',
-  sshKey: path.join(os.homedir(), 'VMs', 'windows-pool', 'secrets', 'id_ed25519'),
 
   // Inside the guest.
   guest: {

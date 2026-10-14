@@ -115,7 +115,7 @@ export const vm = {
   // Runs a command over SSH, calling onLine for each line of its output. Resolves with the
   // exit code; the returned object's kill() ends it.
   stream(inst, command, onLine) {
-    const args = ['-i', config.sshKey, '-p', String(inst.ssh_port), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
+    const args = ['-i', inst.ssh_key, '-p', String(inst.ssh_port), '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=no',
       '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR', '-o', 'ConnectTimeout=10',
       '-o', 'ServerAliveInterval=30', `${inst.user || 'pool'}@127.0.0.1`, command];
     const child = spawn('ssh', args, { stdio: ['ignore', 'pipe', 'pipe'] });
