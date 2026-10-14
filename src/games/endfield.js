@@ -74,7 +74,8 @@ export function catalog() {
     Object.assign(options, d.option || {});
     for (const p of d.preset || []) presets[p.name] = p;
   }
-  const linux = tasks.filter((t) => !t.controller || t.controller.includes('Linux-Wlroots'));
+  // AutoPlay is the flow controller every run goes through, not a task to pick.
+  const linux = tasks.filter((t) => (!t.controller || t.controller.includes('Linux-Wlroots')) && t.name !== 'AutoPlay');
   const full = presets.DailyFull?.task || [];
   const quick = new Set((presets.QuickDaily?.task || []).map((t) => t.name));
   // A new account starts from MaaEnd's full daily preset with the quick-daily tasks enabled.
@@ -87,6 +88,7 @@ export function catalog() {
     tasks: linux.map((t) => ({ name: t.name, label: label(t.label) || t.name, entry: t.entry, options: t.option || [] })),
     optionLabels: Object.fromEntries(Object.entries(options).map(([k, v]) => [k, label(v.label) || k])),
     entries: Object.fromEntries(linux.map((t) => [t.entry, t.name])),
+    definitions: { tasks: Object.fromEntries(tasks.map((t) => [t.name, t])), options },
     defaults,
   };
   return catalogCache;
@@ -104,23 +106,89 @@ export function checkTasks(tasks) {
   }
 }
 
-// An account's tasks as the CLI's configuration: a string is a selected case, a list the checked
-// cases, an object the fields of an input option.
-function piOptions(option = {}) {
-  return Object.entries(option).map(([name, v]) =>
-    Array.isArray(v) ? { name, values: v.map(String) }
-      : v && typeof v === 'object' ? { name, inputs: Object.fromEntries(Object.entries(v).map(([k, x]) => [k, String(x)])) }
-        : { name, value: String(v) });
+// A task's pipeline override, resolved from its options as MaaPiCli does: the task's own override,
+// then each of the task's options in order, set or not: the chosen case's override (select /
+// switch: a string, unset meaning the default case or else the first; checkbox: a list, unset
+// meaning the default cases) followed by the options that case opens, or an input option's
+// override with its fields filled in (unset fields take their defaults). Overrides apply in order,
+// a later one replacing the fields it names on each node, except attach, which merges.
+function resolveOverride(cat, name, option = {}) {
+  const def = cat.definitions.tasks[name];
+  const merged = {};
+  const apply = (o) => {
+    for (const [node, fields] of Object.entries(o || {})) {
+      const prev = merged[node] || {};
+      merged[node] = { ...prev, ...fields };
+      // as in MaaFramework, attach merges key by key instead of being replaced
+      if (prev.attach && fields?.attach) merged[node].attach = { ...prev.attach, ...fields.attach };
+    }
+  };
+  const visit = (key, seen) => {
+    const opt = cat.definitions.options[key];
+    if (!opt || opt.type === 'hotkey' || seen.has(key)) return;
+    seen.add(key);
+    const value = option[key];
+    if (opt.type === 'input') {
+      let text = JSON.stringify(opt.pipeline_override || {});
+      for (const input of opt.inputs || []) {
+        const v = String(value?.[input.name] ?? input.default ?? '');
+        const raw = (input.pipeline_type || 'string') === 'string' ? JSON.stringify(v).slice(1, -1) : v;
+        text = text.split(`"{${input.name}}"`).join((input.pipeline_type || 'string') === 'string' ? JSON.stringify(v) : v).split(`{${input.name}}`).join(raw);
+      }
+      try {
+        apply(JSON.parse(text));
+      } catch {}
+      return;
+    }
+    const cases = opt.cases || [];
+    let chosen;
+    if (opt.type === 'checkbox') {
+      const names = Array.isArray(value) ? value : Array.isArray(opt.default_case) ? opt.default_case : [];
+      chosen = cases.filter((c) => names.includes(c.name));
+    } else {
+      const pick = value !== undefined && !Array.isArray(value) ? String(value) : (opt.default_case ?? cases[0]?.name);
+      chosen = cases.filter((c) => c.name === pick);
+    }
+    for (const c of chosen) {
+      apply(c.pipeline_override);
+      for (const sub of c.option || []) visit(sub, seen);
+    }
+  };
+  apply(def?.pipeline_override);
+  const seen = new Set();
+  for (const key of def?.option || []) visit(key, seen);
+  return merged;
 }
 
-function piConfig(acc, socket, switchAccount) {
-  const task = [];
+// The flow controller's plan for one account: switching to it when several accounts share the
+// game, then its enabled tasks, each with its options resolved, then playing on for playMinutes
+// (the player state machine: skips story, follows the tracked quest).
+function flowPlan(acc, cat, switchAccount, budgetS, report, playMinutes = 0) {
+  const steps = [];
   if (switchAccount && acc.account_name) {
-    task.push({ name: 'AccountSwitch', option: piOptions({ AccountSwitchMatchMode: 'LastFourDigits', AccountSwitchLastFourDigits: { LastFourDigits: acc.account_name.slice(-4) } }) });
+    steps.push({
+      id: 'AccountSwitch', label: '切换账号', entry: cat.definitions.tasks.AccountSwitch?.entry || 'AccountSwitchStart', required: true, retries: 1,
+      override: resolveOverride(cat, 'AccountSwitch', { AccountSwitchMatchMode: 'LastFourDigits', AccountSwitchLastFourDigits: { LastFourDigits: acc.account_name.slice(-4) } }),
+    });
   }
-  for (const [name, t] of Object.entries(acc.tasks || {})) if (t.enable) task.push({ name, option: piOptions(t.option) });
-  return { controller: { name: 'Linux-Wlroots' }, lnx: { wlr_socket_path: socket }, resource: '官服', task };
+  for (const [name, t] of Object.entries(acc.tasks || {})) {
+    const def = cat.tasks.find((x) => x.name === name);
+    if (!t.enable || !def) continue;
+    steps.push({ id: name, label: def.label, entry: def.entry, override: resolveOverride(cat, name, t.option), retries: 2 });
+  }
+  if (playMinutes > 0) {
+    steps.push({
+      id: 'Play', label: '🎮推进任务', entry: 'AutoPlayPlayer', retries: 0,
+      override: { AutoPlayPlayer: { custom_action_param: { budget_s: playMinutes * 60 } } },
+    });
+  }
+  return { steps, session_budget_s: budgetS, report };
 }
+
+const INTERRUPTS = {
+  CheckAnywhere: '「点击任意处继续」', CheckSpecialInfoPanel: '档案 / 语音面板', HandleTutorialPaging: '说明书', HandleTutorialConfirm: '说明书',
+  HandleTutorialGuide_RightUp: '新手引导', HandleTutorialGuide_LeftUp: '新手引导', RealTimeAutoSkip: '剧情',
+};
 
 // ---- a run ----
 
@@ -203,22 +271,29 @@ export const endfield = {
     this.manualScreen = null;
   },
 
-  // One account: the CLI runs its tasks; their outcomes come from MaaFramework's own log.
+  // One account: MaaEnd's flow controller runs the account's plan (see AutoPlay in our MaaEnd
+  // branch), and reports each step to a file read here.
   async runAccount(ctx, acc, screen, cat, switchAccount) {
     const maafw = path.join(RUNTIME, 'maafw');
+    const dir = path.join(config.dataDir, 'flow');
     fs.mkdirSync(path.join(maafw, 'config'), { recursive: true });
-    const conf = piConfig(acc, screen.wayland_socket, switchAccount);
+    fs.mkdirSync(dir, { recursive: true });
+    const planFile = path.join(dir, `${acc.id}.plan.json`);
+    const reportFile = path.join(dir, `${acc.id}.report.jsonl`);
+    // The controller ends itself a little before the hard limit below.
+    const budgetS = Math.max(300, ctx.settings.accountTimeoutMin * 60 - 180);
+    const plan = flowPlan(acc, cat, switchAccount, budgetS, reportFile, ctx.settings.endfieldPlayMinutes ?? 0);
+    fs.writeFileSync(planFile, JSON.stringify(plan, null, 1));
+    fs.writeFileSync(reportFile, '');
+    const conf = { controller: { name: 'Linux-Wlroots' }, lnx: { wlr_socket_path: screen.wayland_socket }, resource: '官服', task: [{ name: 'AutoPlay' }] };
     fs.writeFileSync(path.join(maafw, 'config', 'maa_pi_config.json'), JSON.stringify(conf, null, 1));
-    const logFile = path.join(maafw, 'debug', 'maafw.log');
-    const before = fs.existsSync(logFile) ? fs.statSync(logFile) : null;
-    const offset = before ? before.size : 0;
-    this.logIno = before?.ino ?? null;
-    const wanted = conf.task.map((t) => t.name);
-    ctx.log(`任务：${wanted.map((n) => cat.tasks.find((t) => t.name === n)?.label || n).join('、')}`, acc.name);
+    ctx.log(`计划：${plan.steps.map((st) => st.label).join(' → ') || '（没有启用的任务）'}`, acc.name);
 
     const child = spawn(path.join(maafw, 'MaaPiCli'), ['-d'], {
-      cwd: maafw, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
-      env: { ...process.env, LD_LIBRARY_PATH: maafw, MAA_DAILY_OWN: '1' },
+      cwd: maafw, detached: true, stdio: ['ignore', 'ignore', 'ignore'],
+      env: { ...process.env, LD_LIBRARY_PATH: maafw, MAA_DAILY_OWN: '1', MAA_DAILY_FLOW_PLAN: planFile, MAA_DAILY_FLOW_REPORT: reportFile,
+        // the agents turn the camera through this compositor's virtual pointer (MaaFramework's Wlr input has no relative move)
+        MAAEND_WLR_SOCKET: screen.wayland_socket },
     });
     const kill = () => {
       try {
@@ -229,36 +304,35 @@ export const endfield = {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      ctx.log(`运行超过 ${ctx.settings.accountTimeoutMin} 分钟，停止`, acc.name);
+      ctx.log(`运行超过 ${ctx.settings.accountTimeoutMin} 分钟，强制停止`, acc.name);
       kill();
     }, ctx.settings.accountTimeoutMin * 60_000);
-    const watch = setInterval(() => this.readOutcomes(ctx, acc, logFile, offset, cat, false), 5000);
-    const code = await new Promise((resolve) => child.on('close', resolve));
+    const track = { pos: 0, rest: '', chains: {}, ended: null };
+    const read = () => this.readReport(ctx, acc, reportFile, track);
+    const watch = setInterval(read, 2000);
+    await new Promise((resolve) => child.on('close', resolve));
     clearInterval(watch);
     clearTimeout(timer);
     ctx.setChild(null);
-    const chains = this.readOutcomes(ctx, acc, logFile, offset, cat, true);
-    for (const n of wanted) chains[n] ||= 'error';
-    const done = wanted.filter((n) => chains[n] === 'done');
-    const ok = code === 0 && done.length === wanted.length;
-    return { ok, chains, timed_out: timedOut, partial: !ok && done.length > 0 && chains.AccountSwitch !== 'error' };
+    read();
+    const wanted = plan.steps.map((st) => st.id);
+    for (const n of wanted) {
+      if (!track.chains[n] || track.chains[n] === 'start') {
+        track.chains[n] = 'error';
+        ctx.event({ ev: 'chain', account: acc.id, chain: n, state: 'error', label: plan.steps.find((st) => st.id === n)?.label });
+      }
+    }
+    if (!track.ended) ctx.log('流程控制器没有正常结束', acc.name);
+    const done = wanted.filter((n) => track.chains[n] === 'done');
+    const ok = Boolean(track.ended) && done.length === wanted.length;
+    return { ok, chains: track.chains, timed_out: timedOut, partial: !ok && done.length > 0 && track.chains.AccountSwitch !== 'error' };
   },
 
-  // Each task's start and end, from the framework log since `offset`: every call reads only what
-  // was appended since the last one, and reports each change once.
-  readOutcomes(ctx, acc, logFile, offset, cat, final) {
-    const tracks = (this.tracks ||= new Map());
-    const key = `${acc.id}:${offset}`;
-    const track = tracks.get(key) || { pos: offset, ino: null, rest: '', state: {} };
+  // The controller's report, one JSON line per transition, read from where the last call stopped.
+  readReport(ctx, acc, file, track) {
     try {
-      const fd = fs.openSync(logFile, 'r');
-      const { size, ino } = fs.fstatSync(fd);
-      // The framework rotates its log when it starts: another file, or a shorter one, is new.
-      track.ino ??= offset ? this.logIno : ino;
-      if (ino !== track.ino || size < track.pos) {
-        track.pos = 0;
-        track.ino = ino;
-      }
+      const fd = fs.openSync(file, 'r');
+      const { size } = fs.fstatSync(fd);
       if (size > track.pos) {
         const buf = Buffer.alloc(size - track.pos);
         fs.readSync(fd, buf, 0, buf.length, track.pos);
@@ -267,19 +341,38 @@ export const endfield = {
       }
       fs.closeSync(fd);
     } catch {}
-    const cut = track.rest.lastIndexOf('\n');
-    const text = cut >= 0 ? track.rest.slice(0, cut) : '';
-    track.rest = cut >= 0 ? track.rest.slice(cut + 1) : track.rest;
-    const re = /\[msg=Tasker\.Task\.(Starting|Succeeded|Failed)\] \[details=\{"entry":"([^"]+)"/g;
-    for (let m; (m = re.exec(text));) {
-      const name = cat.entries[m[2]] || (m[2].startsWith('AccountSwitch') ? 'AccountSwitch' : m[2]);
-      const st = m[1] === 'Starting' ? 'start' : m[1] === 'Succeeded' ? 'done' : 'error';
-      if (track.state[name] === st) continue;
-      track.state[name] = st;
-      ctx.event({ ev: 'chain', account: acc.id, chain: name, state: st, label: cat.tasks.find((t) => t.name === name)?.label });
+    const lines = track.rest.split('\n');
+    track.rest = lines.pop();
+    for (const line of lines) {
+      let ev;
+      try {
+        ev = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (ev.ev === 'step') {
+        if (ev.id === 'EnterWorld') {
+          if (ev.state === 'skipped') ctx.log(`无法进入大世界：${ev.reason || ''}`, acc.name);
+          continue;
+        }
+        if (ev.state === 'retry') {
+          ctx.log(`${ev.label} 第 ${ev.attempt} 次没成功（${ev.reason}），清理画面、回到大世界后重试`, acc.name);
+          continue;
+        }
+        const state = ev.state === 'skipped' ? 'error' : ev.state;
+        track.chains[ev.id] = state;
+        ctx.event({ ev: 'chain', account: acc.id, chain: ev.id, state, label: ev.label });
+        if (ev.state === 'skipped') ctx.log(`${ev.label} 跳过：${ev.reason || ''}`, acc.name);
+      } else if (ev.ev === 'interrupt') {
+        ctx.log(`处理了${INTERRUPTS[ev.node] || ev.node}`, acc.name);
+      } else if (ev.ev === 'recover' && !ev.ok) {
+        ctx.log('回到大世界失败', acc.name);
+      } else if (ev.ev === 'play') {
+        ctx.log(`推进任务 ${Math.round(ev.seconds / 60)} 分钟：任务目标推进 ${ev.advances} 次`, acc.name);
+      } else if (ev.ev === 'session' && ev.phase === 'end') {
+        track.ended = ev;
+        ctx.log(`流程结束：完成 ${ev.done} 项，跳过 ${ev.skipped} 项${ev.reason ? `（${ev.reason}）` : ''}`, acc.name);
+      }
     }
-    if (final) tracks.delete(key);
-    else tracks.set(key, track);
-    return { ...track.state };
   },
 };

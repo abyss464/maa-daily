@@ -12,8 +12,15 @@ Authelia, admins only; the remote viewer opens only from the local page).
   launcher's install; prefix, Wine build and environment are read from Lutris at every launch) runs
   under Wine in a screen of the hypr-screens pool, on the real GPU and invisible. MaaEnd, from our own
   branch (`~/Code/vendor/MaaEnd`, branch `maa-daily`, see its `MAA-DAILY.md`), drives it with its CLI
-  through the `Linux-Wlroots` controller, account after account; task outcomes are read from
-  MaaFramework's log. `endfield/link-runtime.sh` lays the built MaaEnd out the way its CLI wants it.
+  through the `Linux-Wlroots` controller, account after account. Each account is one MaaEnd
+  `AutoPlay` task whose flow controller runs a plan the service writes
+  (`~/.local/share/maa-daily/flow/<account>.plan.json`: switching to the account when several share
+  the game, the account's enabled tasks with their options resolved as MaaPiCli resolves them, then
+  "推进任务" for the configured minutes) and reports every step as a JSON line
+  (`<account>.report.jsonl`), which the run log and chains are built from. "推进任务" is MaaEnd's player
+  state machine on a virtual pad (it skips story and follows the tracked quest; see `MAA-DAILY.md`);
+  it needs write access to `/dev/uinput`, and 0 minutes turns it off.
+  `endfield/link-runtime.sh` lays the built MaaEnd out the way its CLI wants it.
   A run skips Endfield when the game already runs in that prefix (the owner playing). For a login or a
   tutorial MaaEnd does not handle, "打开终末地（用于操作）" opens the game in a pool screen worked
   from the pool's browser viewer.

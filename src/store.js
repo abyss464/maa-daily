@@ -31,6 +31,7 @@ export const DEFAULT_SETTINGS = {
   instance: 'arknights',
   // The Lutris game whose Wine prefix holds Endfield (the official launcher's install).
   endfieldLutrisGame: 'arknight',
+  endfieldPlayMinutes: 20,
   // Shut the emulator and Windows down after a run, when the run was what started Windows.
   shutdownAfter: true,
   closeGame: true,
@@ -120,6 +121,7 @@ export const store = {
     if (body.closeGame !== undefined) s.closeGame = Boolean(body.closeGame);
     if (body.accountTimeoutMin !== undefined) s.accountTimeoutMin = intIn(body.accountTimeoutMin, 5, 600, '单账号最长运行分钟数');
     if (body.instance !== undefined) s.instance = String(body.instance).trim() || DEFAULT_SETTINGS.instance;
+    if (body.endfieldPlayMinutes !== undefined) s.endfieldPlayMinutes = intIn(body.endfieldPlayMinutes, 0, 600, '推进任务的分钟数');
     if (body.endfieldLutrisGame !== undefined) s.endfieldLutrisGame = String(body.endfieldLutrisGame).trim() || DEFAULT_SETTINGS.endfieldLutrisGame;
     state.settings = s;
     save();

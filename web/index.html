@@ -270,6 +270,7 @@ details.pb p { margin: 8px 0 0; }
       <div class="ph"><h2>明日方舟：终末地</h2><span class="sub">LUTRIS · MAAEND</span></div>
       <div class="pb form" style="padding-top:16px">
         <div class="row"><label class="field"><span>Lutris 游戏</span><input type="text" id="st-lutris"><small>装着终末地的 Lutris 游戏（官方启动器那一项）的标识；前缀、Wine 和环境变量每次都从 Lutris 读取</small></label></div>
+        <div class="row"><label class="field"><span>推进任务（分钟）</span><input type="number" id="st-play" min="0" max="600"><small>日常做完后，用虚拟手柄接着玩这么久：跳过剧情、跟着追踪的任务走；0 为不玩</small></label></div>
         <div class="hint" id="st-maaend"></div>
       </div>
     </div>
@@ -660,6 +661,7 @@ function fillSettings() {
   $('#st-idle').value = s.idleMinutes; $('#st-interval').value = s.intervalHours; $('#st-retry').value = s.retryMinutes; $('#st-yield').checked = s.stopWhenBusy;
   $('#st-cpu').value = s.cpuMax; $('#st-gpu').value = s.gpuMax; $('#st-mem').value = s.memMarginGb;
   $('#st-lutris').value = s.endfieldLutrisGame || '';
+  $('#st-play').value = s.endfieldPlayMinutes ?? 0;
   const m = S.games?.endfield?.maaend;
   $('#st-maaend').innerHTML = m?.available ? `MaaEnd：自维护分支（~/Code/vendor/MaaEnd，maa-daily 分支）${m.version ? `，${esc(m.version)}` : ''}；重新构建后运行 <code>endfield/link-runtime.sh</code>。` : `<span class="err">MaaEnd 不可用：${esc(m?.error || '')}</span>`;
   $('#st-err').textContent = '';
@@ -669,7 +671,8 @@ $('#st-save').onclick = act(async () => {
     await api('PUT', '/api/settings', { enabled: $('#st-enabled').checked, idleMinutes: Number($('#st-idle').value), intervalHours: Number($('#st-interval').value),
       retryMinutes: Number($('#st-retry').value), stopWhenBusy: $('#st-yield').checked,
       cpuMax: Number($('#st-cpu').value), gpuMax: Number($('#st-gpu').value), memMarginGb: Number($('#st-mem').value), shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
-      accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value, endfieldLutrisGame: $('#st-lutris').value });
+      accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value, endfieldLutrisGame: $('#st-lutris').value,
+      endfieldPlayMinutes: Number($('#st-play').value) });
   } catch (e) { $('#st-err').textContent = e.message; return; }
   toast('设置已保存'); await refresh(); fillSettings();
 });
