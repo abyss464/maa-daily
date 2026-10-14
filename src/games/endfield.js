@@ -162,7 +162,8 @@ function resolveOverride(cat, name, option = {}) {
 
 // The flow controller's plan for one account: switching to it when several accounts share the
 // game, then its enabled tasks, each with its options resolved, then playing on for playMinutes
-// (the player state machine: skips story, follows the tracked quest).
+// (the player state machine: skips story, follows the tracked quest) between two rounds of
+// claiming what the menus' badges mark (events, mail, the action manual, the pass).
 function flowPlan(acc, cat, switchAccount, budgetS, report, playMinutes = 0) {
   const steps = [];
   if (switchAccount && acc.account_name) {
@@ -177,10 +178,14 @@ function flowPlan(acc, cat, switchAccount, budgetS, report, playMinutes = 0) {
     steps.push({ id: name, label: def.label, entry: def.entry, override: resolveOverride(cat, name, t.option), retries: 2 });
   }
   if (playMinutes > 0) {
+    // claiming what the badges mark before and after playing: playing turns up more to claim
+    const badges = (id) => ({ id, label: '🎁领红点奖励', entry: 'AutoPlayBadges', retries: 0 });
+    steps.push(badges('Badges'));
     steps.push({
       id: 'Play', label: '🎮推进任务', entry: 'AutoPlayPlayer', retries: 0,
       override: { AutoPlayPlayer: { custom_action_param: { budget_s: playMinutes * 60 } } },
     });
+    steps.push(badges('BadgesAfter'));
   }
   return { steps, session_budget_s: budgetS, report };
 }
@@ -367,6 +372,8 @@ export const endfield = {
         ctx.log(`处理了${INTERRUPTS[ev.node] || ev.node}`, acc.name);
       } else if (ev.ev === 'recover' && !ev.ok) {
         ctx.log('回到大世界失败', acc.name);
+      } else if (ev.ev === 'badges') {
+        ctx.log(`跟着红点点了 ${ev.clicks} 处`, acc.name);
       } else if (ev.ev === 'play') {
         ctx.log(`推进任务 ${Math.round(ev.seconds / 60)} 分钟：任务目标推进 ${ev.advances} 次`, acc.name);
       } else if (ev.ev === 'session' && ev.phase === 'end') {
