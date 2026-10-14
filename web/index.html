@@ -166,7 +166,9 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
         <div class="pb actions">
           <button class="btn primary" id="b-run">立即运行全部账号</button>
           <button class="btn danger hide" id="b-stop">停止</button>
-          <button class="btn" id="b-prepare">打开游戏（用于登录）</button>
+          <button class="btn" id="b-prepare">打开明日方舟（用于登录）</button>
+          <button class="btn hide" id="b-prepare-ef">打开终末地（用于操作）</button>
+          <button class="btn hide" id="b-close-ef">关闭终末地</button>
           <button class="btn" id="b-shutdown">关机</button>
         </div>
       </div>
@@ -204,7 +206,7 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
   <section id="tab-accounts" class="hide stack">
     <div class="panel">
       <div class="ph"><h2>账号</h2><span class="sub">ACCOUNTS · 按顺序运行</span>
-        <div class="right"><button class="btn primary sm" id="b-add">添加账号</button></div></div>
+        <div class="right"><select id="add-game" style="width:auto;padding:3px 8px"><option value="arknights">明日方舟</option><option value="endfield">明日方舟：终末地</option></select><button class="btn primary sm" id="b-add">添加账号</button></div></div>
       <div id="acc-list"></div>
     </div>
     <div class="panel">
@@ -217,6 +219,7 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
           <li>把登录界面账号列表里显示的登录名（官服如 <code>138****1234</code>，B 服是昵称）填进账号的「登录名」，填其中一段唯一的部分即可，例如手机号后四位。</li>
         </ol>
         只有一个账号时登录名可以留空，MAA 就不切换账号。
+        <p style="margin:12px 0 0"><b>终末地</b>：游戏用的是 Lutris 里那个前缀，在 Lutris 里正常打开游戏、登录一次即可，登录状态和自动运行共用。多个终末地账号都要在这台电脑上登录过，并填上各自的手机号后四位，MaaEnd 用它在登录界面切换。你自己在玩时，自动运行会跳过终末地。</p>
       </div>
     </div>
   </section>
@@ -276,7 +279,8 @@ const DRONES = { _NotUse: '不使用', Money: '贸易站 · 龙门币', Syntheti
 const STAGES = [['', '当前 / 上次关卡'], ['1-7', '1-7'], ['CE-6', 'CE-6 龙门币'], ['LS-6', 'LS-6 作战记录'], ['CA-5', 'CA-5 技能书'], ['AP-5', 'AP-5 采购凭证'], ['SK-5', 'SK-5 碳'], ['Annihilation', '当期剿灭']];
 
 let S = null;            // /api/state
-let defaults = null;     // default MAA tasks
+let G = null;            // /api/games: per game, label and the tasks a new account starts with
+let defaults = null;     // Arknights' default MAA tasks
 let open = new Set();    // expanded account editors
 let detailId = null;
 
@@ -324,15 +328,22 @@ async function refresh() {
   const busy = Boolean(S.busy);
   $('#b-run').disabled = busy || !S.accounts.some((a) => a.enabled);
   $('#b-prepare').disabled = busy;
+  const hasEf = S.accounts.some((a) => a.game === 'endfield');
+  $('#b-prepare-ef').classList.toggle('hide', !hasEf || Boolean(S.screen?.manual));
+  $('#b-prepare-ef').disabled = busy;
+  $('#b-close-ef').classList.toggle('hide', !S.screen?.manual);
+  $('#b-close-ef').disabled = busy;
   $('#b-shutdown').disabled = busy || g.status !== 'ready';
   $('#b-stop').classList.toggle('hide', !(busy && S.busy.kind === 'run'));
   $('#b-stop').disabled = Boolean(S.busy?.stopping);
   const v = $('#viewer');
   // The pool's viewer listens on the host's loopback, so it opens only from a page served there, not through a proxy.
   const loopback = (h) => ['127.0.0.1', 'localhost', '[::1]'].includes(h);
-  const reachable = g.viewer && (!loopback(new URL(g.viewer).hostname) || loopback(location.hostname));
-  v.classList.toggle('hide', !(reachable && g.status === 'ready'));
-  if (g.viewer) v.href = g.viewer;
+  // A pool screen on show (Endfield) has the pool's viewer; otherwise the guest's.
+  const target = S.screen?.vnc ? S.screen.viewer : g.status === 'ready' ? g.viewer : null;
+  const reachable = target && (!loopback(new URL(target).hostname) || loopback(location.hostname));
+  v.classList.toggle('hide', !reachable);
+  if (target) v.href = target;
   if (S.notice && S.notice.at !== refresh.lastNotice) {
     if (refresh.lastNotice !== undefined) toast(S.notice.msg, !S.notice.ok);
     refresh.lastNotice = S.notice.at;
@@ -343,8 +354,10 @@ async function refresh() {
 
 // ---- screen ----
 async function screen() {
-  if (document.hidden || $('#tab-home').classList.contains('hide') || S?.guest?.status !== 'ready') {
-    if (S && S.guest.status !== 'ready') $('#screen').innerHTML = `WINDOWS ${esc((GUEST[S.guest.status] || '未运行'))}`;
+  // Endfield's pool screen while it plays, else the Windows guest's screen.
+  const live = S?.screen || S?.guest?.status === 'ready';
+  if (document.hidden || $('#tab-home').classList.contains('hide') || !live) {
+    if (S && !live) $('#screen').innerHTML = `WINDOWS ${esc((GUEST[S.guest.status] || '未运行'))}`;
     return;
   }
   try {
@@ -431,9 +444,32 @@ function taskFields(name, p) {
   if (name === 'Award') return `<div class="actions">${chk('award', '每日 / 每周任务奖励')}${chk('mail', '邮件')}${chk('recruit', '限定池每日免费单抽')}</div>`;
   return '';
 }
+function endfieldEditor(a) {
+  const ef = G.endfield;
+  const tasks = a.tasks || ef.defaults;
+  const names = [...new Set([...Object.keys(tasks), ...ef.tasks.map((t) => t.name)])].filter((n) => ef.tasks.some((t) => t.name === n));
+  return `<div class="form" data-form="${esc(a.id)}" data-game="endfield">
+    <div class="row">
+      <label class="field"><span>名称</span><input type="text" data-f="name" value="${esc(a.name)}"></label>
+      <label class="field"><span>手机号后四位</span><input type="text" data-f="account_name" maxlength="4" value="${esc(a.account_name || '')}" placeholder="如 1234"><small>只有一个终末地账号时可以留空；多个账号时用它切换</small></label>
+    </div>
+    ${ef.available ? '' : `<div class="err">${esc(ef.error || 'MaaEnd 不可用')}</div>`}
+    <div class="task"><div class="task-b" style="padding-top:10px">${names.map((n) => {
+      const t = ef.tasks.find((x) => x.name === n);
+      const p = tasks[n] || { enable: false, option: {} };
+      const opts = Object.keys(p.option || {}).length;
+      return `<label class="check" style="display:flex;margin:4px 0" data-etask="${esc(n)}"><input type="checkbox" ${p.enable ? 'checked' : ''}> ${esc(t?.label || n)}${opts ? `<span class="hint">　${opts} 项设置</span>` : ''}</label>`;
+    }).join('')}</div></div>
+    <details><summary>高级：直接编辑交给 MaaEnd 的任务和设置（JSON）</summary>
+      <div class="field" style="margin-top:8px"><textarea data-f="raw" spellcheck="false">${esc(JSON.stringify(tasks, null, 2))}</textarea>
+      <small>键为 MaaEnd 的任务名，option 里字符串是单选、数组是多选、对象是输入项。这里改过后点保存即以这里为准。</small></div></details>
+    <div class="actions"><button class="btn primary" data-act="save">保存</button><button class="btn" data-act="cancel">收起</button><span class="err" data-err></span></div>
+  </div>`;
+}
 function editor(a) {
+  if ((a.game || 'arknights') === 'endfield') return endfieldEditor(a);
   const tasks = a.tasks || defaults;
-  return `<div class="form" data-form="${esc(a.id)}">
+  return `<div class="form" data-form="${esc(a.id)}" data-game="arknights">
     <div class="row">
       <label class="field"><span>名称</span><input type="text" data-f="name" value="${esc(a.name)}"></label>
       <label class="field"><span>服务器</span><select data-f="client_type">${Object.entries(CLIENT).map(([k, v]) => `<option value="${k}" ${a.client_type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -457,7 +493,9 @@ function renderAccounts(force = true) {
   renderAccounts.sig = sig;
   if (!S.accounts.length) { el.innerHTML = '<div class="empty">还没有账号，点「添加账号」</div>'; return; }
   el.innerHTML = S.accounts.map((a, i) => {
-    const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => TASKS[k] || k);
+    const ef = (a.game || 'arknights') === 'endfield';
+    const label = (k) => (ef ? G.endfield.tasks.find((t) => t.name === k)?.label : TASKS[k]) || k;
+    const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => label(k));
     const d = S.due?.[a.id] || {};
     const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
       : d.retryAt ? ` · 上次失败，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
@@ -465,7 +503,7 @@ function renderAccounts(force = true) {
       <div class="acc-head">
         <label class="check" title="参与定时运行"><input type="checkbox" data-act="toggle" ${a.enabled ? 'checked' : ''}></label>
         <span class="name">${esc(a.name)}</span>
-        <span class="meta">${CLIENT[a.client_type] || a.client_type}${a.account_name ? ` · ${esc(a.account_name)}` : ' · 不切换账号'} · ${on.join('、') || '无任务'}${when}</span>
+        <span class="meta"><span class="chip">${ef ? '终末地' : '明日方舟'}</span>${ef ? '' : `${CLIENT[a.client_type] || a.client_type} · `}${a.account_name ? esc(a.account_name) : '不切换账号'} · ${on.join('、') || '无任务'}${when}</span>
         <span class="right">
           <button class="btn sm" data-act="up" ${i ? '' : 'disabled'} title="上移">↑</button>
           <button class="btn sm" data-act="down" ${i < S.accounts.length - 1 ? '' : 'disabled'} title="下移">↓</button>
@@ -481,6 +519,13 @@ function collect(form, base) {
   let tasks;
   if (raw.dataset.dirty) {
     try { tasks = JSON.parse(raw.value); } catch { throw new Error('高级参数不是合法的 JSON'); }
+  } else if (form.dataset.game === 'endfield') {
+    tasks = structuredClone(base.tasks || G.endfield.defaults);
+    for (const row of form.querySelectorAll('[data-etask]')) {
+      const n = row.dataset.etask;
+      (tasks[n] ||= { enable: false, option: structuredClone(G.endfield.defaults[n]?.option || {}) }).enable = $('input', row).checked;
+    }
+    return { name: $('[data-f=name]', form).value, account_name: $('[data-f=account_name]', form).value, tasks };
   } else {
     tasks = structuredClone(base.tasks || defaults);
     for (const t of form.querySelectorAll('[data-task]')) {
@@ -518,7 +563,8 @@ $('#acc-list').addEventListener('click', act(async (e) => {
   await refresh(); renderAccounts();
 }));
 $('#b-add').onclick = act(async () => {
-  const a = await api('POST', '/api/accounts', { name: `账号 ${(S?.accounts.length || 0) + 1}`, client_type: 'Official' });
+  const game = $('#add-game').value;
+  const a = await api('POST', '/api/accounts', { game, name: `${game === 'endfield' ? '终末地' : '明日方舟'}账号 ${(S?.accounts.length || 0) + 1}`, client_type: 'Official' });
   open.add(a.id); await refresh(); renderAccounts(); tab('accounts');
 });
 
@@ -526,12 +572,14 @@ $('#b-add').onclick = act(async () => {
 $('#b-run').onclick = act(async () => { await api('POST', '/api/run', {}); toast('开始运行'); refresh(); });
 $('#b-stop').onclick = act(async () => { await api('POST', '/api/stop'); refresh(); });
 $('#b-prepare').onclick = act(async () => {
-  const types = [...new Set(S.accounts.map((a) => a.client_type))];
+  const types = [...new Set(S.accounts.filter((a) => (a.game || 'arknights') === 'arknights').map((a) => a.client_type))];
   let ct = 'Official';
   if (types.includes('Bilibili') && types.includes('Official')) ct = confirm('打开 B 服客户端？（取消则打开官服）') ? 'Bilibili' : 'Official';
   else if (types.length === 1) ct = types[0];
   await api('POST', '/api/prepare', { client_type: ct }); toast('正在打开 Windows 和游戏'); refresh();
 });
+$('#b-prepare-ef').onclick = act(async () => { await api('POST', '/api/prepare', { client_type: 'endfield' }); toast('正在打开终末地'); refresh(); });
+$('#b-close-ef').onclick = act(async () => { await api('POST', '/api/close-endfield'); refresh(); });
 $('#b-shutdown').onclick = act(async () => { if (!confirm('关闭模拟器和 Windows？')) return; await api('POST', '/api/shutdown'); refresh(); });
 
 // ---- settings ----
@@ -557,7 +605,8 @@ $('#st-save').onclick = act(async () => {
 // ---- boot ----
 document.body.insertAdjacentHTML('beforeend', `<datalist id="stages">${STAGES.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</datalist>`);
 (async () => {
-  defaults = await api('GET', '/api/tasks/defaults').catch(() => ({}));
+  G = await api('GET', '/api/games').catch(() => ({ arknights: { defaults: {} }, endfield: { tasks: [], defaults: {}, available: false } }));
+  defaults = G.arknights.defaults;
   await refresh();
   renderAccounts(); loadStats(); loadRecent();
   let t = 'home'; try { t = localStorage.getItem('maa-daily-tab') || 'home'; } catch {}

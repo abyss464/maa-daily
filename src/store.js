@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { GAMES } from './games/index.js';
 
 const STATE = path.join(config.dataDir, 'state.json');
 const RUNS = path.join(config.dataDir, 'runs');
@@ -28,28 +29,13 @@ export const DEFAULT_SETTINGS = {
   // Load above the limits for two minutes ends an idle run; the accounts it did not finish stay due.
   stopWhenBusy: true,
   instance: 'arknights',
+  // The Lutris game whose Wine prefix holds Endfield (the official launcher's install).
+  endfieldLutrisGame: 'arknight',
   // Shut the emulator and Windows down after a run, when the run was what started Windows.
   shutdownAfter: true,
   closeGame: true,
   accountTimeoutMin: 90,
 };
-
-// The tasks a new account starts with: MAA's own parameters, so the advanced editor shows
-// exactly what MAA receives.
-export function defaultTasks() {
-  return {
-    Fight: { enable: true, stage: '', medicine: 0, medicine_expire_days: 0, stone: 0, series: 0, report_to_penguin: false },
-    Recruit: { enable: true, refresh: true, select: [4], confirm: [3, 4], times: 4, set_time: true, expedite: false },
-    Infrast: {
-      enable: true, mode: 0, facility: ['Mfg', 'Trade', 'Power', 'Control', 'Reception', 'Office', 'Dorm'],
-      drones: 'Money', threshold: 0.3, replenish: true,
-    },
-    Mall: { enable: true, visit_friends: true, shopping: true, buy_first: ['招聘许可', '龙门币'], blacklist: ['家具零件', '碳'] },
-    Award: { enable: true, award: true, mail: true, recruit: false },
-  };
-}
-
-const TASK_NAMES = Object.keys(defaultTasks());
 
 fs.mkdirSync(RUNS, { recursive: true, mode: 0o700 });
 
@@ -87,8 +73,14 @@ function cleanAccount(body, base = {}) {
   const a = { ...base };
   if (body.name !== undefined) a.name = String(body.name).trim().slice(0, 60);
   if (!a.name) throw new InputError('账号需要一个名称');
+  if (body.game !== undefined && !a.tasks) {
+    if (!GAMES[body.game]) throw new InputError(`不支持的游戏：${body.game}`);
+    a.game = body.game;
+  }
+  a.game ||= 'arknights';
+  const game = GAMES[a.game];
   if (body.client_type !== undefined) {
-    if (!['Official', 'Bilibili'].includes(body.client_type)) throw new InputError('服务器只能是官服或 B 服');
+    if (a.game === 'arknights' && !['Official', 'Bilibili'].includes(body.client_type)) throw new InputError('服务器只能是官服或 B 服');
     a.client_type = body.client_type;
   }
   a.client_type ||= 'Official';
@@ -98,15 +90,14 @@ function cleanAccount(body, base = {}) {
   if (body.note !== undefined) a.note = String(body.note).slice(0, 500);
   if (body.tasks !== undefined) {
     if (typeof body.tasks !== 'object' || body.tasks === null || Array.isArray(body.tasks)) throw new InputError('任务参数必须是 JSON 对象');
-    const tasks = {};
-    for (const [k, v] of Object.entries(body.tasks)) {
-      if (!TASK_NAMES.includes(k)) throw new InputError(`未知任务：${k}（可用：${TASK_NAMES.join('、')}）`);
-      if (typeof v !== 'object' || v === null || Array.isArray(v)) throw new InputError(`任务 ${k} 的参数必须是 JSON 对象`);
-      tasks[k] = v;
+    try {
+      game.checkTasks(body.tasks);
+    } catch (e) {
+      throw new InputError(e.message);
     }
-    a.tasks = tasks;
+    a.tasks = body.tasks;
   }
-  a.tasks ||= defaultTasks();
+  a.tasks ||= game.defaultTasks();
   return a;
 }
 
@@ -129,6 +120,7 @@ export const store = {
     if (body.closeGame !== undefined) s.closeGame = Boolean(body.closeGame);
     if (body.accountTimeoutMin !== undefined) s.accountTimeoutMin = intIn(body.accountTimeoutMin, 5, 600, '单账号最长运行分钟数');
     if (body.instance !== undefined) s.instance = String(body.instance).trim() || DEFAULT_SETTINGS.instance;
+    if (body.endfieldLutrisGame !== undefined) s.endfieldLutrisGame = String(body.endfieldLutrisGame).trim() || DEFAULT_SETTINGS.endfieldLutrisGame;
     state.settings = s;
     save();
     return s;

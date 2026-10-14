@@ -4,25 +4,31 @@
 //   GET    /api/state                 settings, accounts and whether each is due, idleness, what is running, the guest
 //   PUT    /api/settings              {enabled, idleMinutes, intervalHours, retryMinutes, stopWhenActive,
 //                                      shutdownAfter, closeGame, accountTimeoutMin, instance}
-//   POST   /api/accounts              add {name, client_type, account_name, enabled, note, tasks}
+//   POST   /api/accounts              add {game, name, client_type, account_name, enabled, note, tasks}
 //   PUT    /api/accounts/:id          change any of those
 //   DELETE /api/accounts/:id
 //   POST   /api/accounts/:id/move     {dir: -1 | 1} (accounts run in list order)
-//   GET    /api/tasks/defaults        the MAA task parameters a new account starts with
+//   GET    /api/games                 the games: label, the tasks a new account starts with, and for
+//                                      Endfield MaaEnd's task catalogue
 //   POST   /api/run                   run now {accounts: [ids]} (default: every enabled account)
 //   POST   /api/stop                  stop what is running
-//   POST   /api/prepare               boot Windows and open the game for a login {client_type}
+//   POST   /api/prepare               open a game for a person {client_type: Official | Bilibili (Arknights
+//                                      in the guest) | endfield (in a pool screen, worked from its viewer)}
 //   POST   /api/shutdown              shut the emulator and Windows down
+//   POST   /api/close-endfield        close Endfield opened for a person, and its screen
 //   GET    /api/runs                  run records, newest first {limit}
 //   GET    /api/runs/:id              one record with its log
 //   GET    /api/stats                 totals per account and battles per day {days}
-//   GET    /api/screen                the guest's screen as PNG
+//   GET    /api/screen                the screen of what runs as PNG: Endfield's pool screen while it
+//                                      plays, else the Windows guest's screen
 
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { config } from './config.js';
-import { store, runs, defaultTasks, InputError } from './store.js';
+import { store, runs, InputError } from './store.js';
+import { GAMES } from './games/index.js';
+import { screens } from './screens.js';
 import { orchestrator } from './orchestrator.js';
 import { startScheduler, idle, accountStatus, nextDue } from './scheduler.js';
 import { stats } from './stats.js';
@@ -74,6 +80,18 @@ async function guest() {
   }
 }
 
+// The pool screen on show (Endfield playing, or opened for a person), with its viewer.
+async function poolScreen() {
+  const id = orchestrator.screen();
+  if (!id) return null;
+  try {
+    const s = await screens.get(id);
+    return { id, viewer: s.viewer, vnc: Boolean(s.vnc_port), vncError: s.vnc_error, manual: id === GAMES.endfield.manualScreen };
+  } catch {
+    return null;
+  }
+}
+
 async function route(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean);
   const m = req.method;
@@ -88,10 +106,20 @@ async function route(req, res, url) {
     return send(res, 200, {
       settings: store.settings(), accounts: store.accounts(), busy: orchestrator.busy(),
       notice: orchestrator.lastNotice || null, guest: await guest(), idle, due: accountStatus(), nextDue: nextDue(),
+      screen: await poolScreen(),
     });
   }
   if (m === 'PUT' && a === 'settings') return send(res, 200, store.updateSettings(await readJson(req)));
-  if (a === 'tasks' && b === 'defaults' && m === 'GET') return send(res, 200, defaultTasks());
+  if (m === 'GET' && a === 'games') {
+    const ef = GAMES.endfield.catalog();
+    return send(res, 200, {
+      arknights: { label: GAMES.arknights.label, defaults: GAMES.arknights.defaultTasks() },
+      endfield: {
+        label: GAMES.endfield.label, available: ef.available, error: ef.error, version: ef.version,
+        tasks: ef.tasks, optionLabels: ef.optionLabels, defaults: ef.defaults,
+      },
+    });
+  }
   if (a === 'accounts') {
     if (m === 'POST' && !b) return send(res, 201, store.addAccount(await readJson(req)));
     if (b && !c && m === 'PUT') {
@@ -112,6 +140,7 @@ async function route(req, res, url) {
   if (m === 'POST' && a === 'stop') return send(res, 200, orchestrator.stop());
   if (m === 'POST' && a === 'prepare') return send(res, 202, orchestrator.prepare((await readJson(req)).client_type));
   if (m === 'POST' && a === 'shutdown') return send(res, 202, orchestrator.shutdown());
+  if (m === 'POST' && a === 'close-endfield') return send(res, 202, orchestrator.closeEndfield());
   if (m === 'GET' && a === 'runs' && !b) {
     const limit = Math.min(Number(url.searchParams.get('limit')) || 50, 500);
     return send(res, 200, runs.list().slice(0, limit));
@@ -122,7 +151,8 @@ async function route(req, res, url) {
   }
   if (m === 'GET' && a === 'stats') return send(res, 200, stats({ days: Math.min(Number(url.searchParams.get('days')) || 30, 365) }));
   if (m === 'GET' && a === 'screen') {
-    const png = await vm.screenshot(store.settings().instance);
+    const screen = orchestrator.screen();
+    const png = screen ? await screens.screenshot(screen) : await vm.screenshot(store.settings().instance);
     res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' });
     return res.end(png);
   }

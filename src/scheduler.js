@@ -1,7 +1,7 @@
 // Runs the due accounts while the computer is idle, judged by load rather than input: every
-// 10 s it samples the CPU share of everything except the Windows guest (the guest container's
-// cgroup is subtracted, so a run never counts against itself), the busiest GPU, and the memory
-// the guest has or could get. Idle means all of them stayed within the limits for the
+// 10 s it samples the CPU share, the busiest GPU and the free memory, all without the run's own
+// share (the Windows guest's cgroup, and the processes marked as the run's own on this machine:
+// Endfield and MaaEnd), so a run never counts against itself. Idle means all of them stayed within the limits for the
 // configured minutes; an idle run is stopped when the load stays above them for two minutes,
 // and the accounts it did not finish stay due.
 
@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { store, runs } from './store.js';
 import { orchestrator } from './orchestrator.js';
 import { vm } from './vm.js';
+import { OWN_MARK } from './games/endfield.js';
 
 const SAMPLE_MS = 10_000;
 const BUSY_MS = 2 * 60_000;
@@ -114,6 +115,61 @@ async function locateGuest() {
   return guestCgroup;
 }
 
+// The run's own processes on this machine (Endfield in its screen, MaaEnd and its agents) carry
+// OWN_MARK in their environment; their CPU ticks, GPU engine time and memory are left out of the
+// load like the guest's. GPU time comes from the DRM fdinfo of each client, counted once.
+const ownSeen = new Map(); // pid -> { start, own }
+let prevOwn = null; // { ticks, gpuNs, t }
+
+function ownLoad() {
+  let ticks = 0;
+  let rss = 0;
+  let gpuNs = 0;
+  const clients = new Set();
+  const alive = new Set();
+  for (const pid of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(pid)) continue;
+    let stat;
+    try {
+      stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    } catch {
+      continue;
+    }
+    const f = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
+    alive.add(pid);
+    let seen = ownSeen.get(pid);
+    if (!seen || seen.start !== f[19]) {
+      let own = false;
+      try {
+        own = `\0${fs.readFileSync(`/proc/${pid}/environ`, 'latin1')}`.includes(`\0${OWN_MARK}\0`);
+      } catch {}
+      seen = { start: f[19], own };
+      ownSeen.set(pid, seen);
+    }
+    if (!seen.own) continue;
+    ticks += Number(f[11]) + Number(f[12]);
+    rss += Number(f[21]) * 4096;
+    let fds = [];
+    try {
+      fds = fs.readdirSync(`/proc/${pid}/fdinfo`);
+    } catch {}
+    for (const fd of fds) {
+      let info;
+      try {
+        info = fs.readFileSync(`/proc/${pid}/fdinfo/${fd}`, 'utf8');
+      } catch {
+        continue;
+      }
+      const client = /drm-client-id:\s+(\d+)/.exec(info)?.[1];
+      if (!client || clients.has(client)) continue;
+      clients.add(client);
+      for (const m of info.matchAll(/drm-engine-(?:gfx|compute):\s+(\d+) ns/g)) gpuNs += Number(m[1]);
+    }
+  }
+  for (const pid of ownSeen.keys()) if (!alive.has(pid)) ownSeen.delete(pid);
+  return { ticks, rss, gpuNs, t: process.hrtime.bigint() };
+}
+
 async function sample() {
   if (guestCgroup && !fs.existsSync(guestCgroup)) guestCgroup = null;
   if (!guestCgroup) await locateGuest();
@@ -121,17 +177,24 @@ async function sample() {
   const guestUsec = guestCgroup ? Number(/usage_usec (\d+)/.exec(readCgroup('cpu.stat') || '')?.[1] || 0) : 0;
   const guestMem = guestCgroup ? Number(readCgroup('memory.current') || 0) : 0;
   const memAvail = memInfo();
-  const gpu = readGpu();
+  const own = ownLoad();
+  let gpu = readGpu();
+  if (gpu !== null && prevOwn && own.gpuNs >= prevOwn.gpuNs) {
+    const share = (own.gpuNs - prevOwn.gpuNs) / Number(own.t - prevOwn.t) * 100;
+    gpu = Math.max(0, gpu - share);
+  }
   if (prevStat && stat.total > prevStat.total) {
     const ticks = stat.total - prevStat.total;
     const busyTicks = ticks - (stat.idle - prevStat.idle);
     const hz = 100; // USER_HZ
     const guestTicks = prevGuest !== null && guestUsec >= prevGuest ? ((guestUsec - prevGuest) / 1e6) * hz : 0;
-    const cpu = Math.max(0, Math.min(100, ((busyTicks - guestTicks) / ticks) * 100));
-    samples.push({ t: Date.now(), cpu, gpu, memFree: memAvail + guestMem, memAvail });
+    const ownTicks = prevOwn && own.ticks >= prevOwn.ticks ? own.ticks - prevOwn.ticks : 0;
+    const cpu = Math.max(0, Math.min(100, ((busyTicks - guestTicks - ownTicks) / ticks) * 100));
+    samples.push({ t: Date.now(), cpu, gpu, memFree: memAvail + guestMem + own.rss, memAvail });
   }
   prevStat = stat;
   prevGuest = guestCgroup ? guestUsec : null;
+  prevOwn = own;
   const keep = Date.now() - Math.max(store.settings().idleMinutes * 60_000, BUSY_MS) - SAMPLE_MS;
   while (samples.length && samples[0].t < keep) samples.shift();
   idle.available = true;

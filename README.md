@@ -1,6 +1,6 @@
 # maa-daily
 
-Arknights dailies for several accounts, run while the computer is idle (by CPU, GPU and memory load) by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
+Arknights and Arknights: Endfield dailies for several accounts, run while the computer is idle (by CPU, GPU and memory load) by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
 inside a Windows machine from the local [windows pool](../windows-pool), and managed from a web page
 at <http://127.0.0.1:30019/>, and from outside at <https://maa.home.nightabyss.com/> (home Caddy behind
 Authelia, admins only; the remote viewer opens only from the local page).
@@ -8,9 +8,18 @@ Authelia, admins only; the remote viewer opens only from the local page).
 - **Where the game runs.** A persistent pool instance (`arknights`, 16 GB, 8 CPUs) holds MuMu
   (Android 15, 1280×720, nested KVM, software rendering), the official and Bilibili clients, MAA
   (`C:\maa\MAA`) and an embedded Python (`C:\maa\python`).
+- **Endfield.** The PC client from its Lutris prefix (the Lutris game `arknight`, the official
+  launcher's install; prefix, Wine build and environment are read from Lutris at every launch) runs
+  under Wine in a screen of the hypr-screens pool, on the real GPU and invisible. MaaEnd, from our own
+  branch (`~/Code/vendor/MaaEnd`, branch `maa-daily`, see its `MAA-DAILY.md`), drives it with its CLI
+  through the `Linux-Wlroots` controller, account after account; task outcomes are read from
+  MaaFramework's log. `endfield/link-runtime.sh` lays the built MaaEnd out the way its CLI wants it.
+  A run skips Endfield when the game already runs in that prefix (the owner playing). For a login or a
+  tutorial MaaEnd does not handle, "打开终末地（用于操作）" opens the game in a pool screen worked
+  from the pool's browser viewer.
 - **When it runs.** While the computer is idle by load, not by input: every 10 s the service samples
-  the CPU share of everything except the Windows guest (the guest container's cgroup usage is
-  subtracted, so a run never counts against itself), the busiest GPU (`gpu_busy_percent`), and the
+  the CPU share of everything except the run itself (the guest container's cgroup, and the
+  processes marked `MAA_DAILY_OWN=1`: Endfield and MaaEnd; their GPU time comes from DRM fdinfo), the busiest GPU (`gpu_busy_percent`), and the
   memory the guest has or could get. Idle means the averages over the configured minutes stay within
   the limits (default CPU 35 %, GPU 40 %, guest RAM + 8 GB free, 5 minutes). The run takes the accounts
   that are due: not successful since the CN daily reset (04:00 UTC+8) or for the configured hours, and
