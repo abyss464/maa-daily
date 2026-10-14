@@ -2,7 +2,8 @@
 
 Arknights dailies for several accounts, run while the computer is idle (by CPU, GPU and memory load) by [MAA](https://github.com/MaaAssistantArknights/MaaAssistantArknights)
 inside a Windows machine from the local [windows pool](../windows-pool), and managed from a web page
-at <http://127.0.0.1:30019/>.
+at <http://127.0.0.1:30019/>, and from outside at <https://maa.home.nightabyss.com/> (home Caddy behind
+Authelia, admins only; the remote viewer opens only from the local page).
 
 - **Where the game runs.** A persistent pool instance (`arknights`, 16 GB, 8 CPUs) holds MuMu
   (Android 15, 1280×720, nested KVM, software rendering), the official and Bilibili clients, MAA

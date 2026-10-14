@@ -8,6 +8,8 @@ Wants=windows-pool.service
 Type=simple
 # Serves http://127.0.0.1:30019 and starts runs at the configured times of day.
 ExecStart=%h/Code/apps/maa-daily/bin/maa-daily
+# Host names the page is also served under (home Caddy proxies maa.home.nightabyss.com here, behind Authelia).
+Environment=MAA_DAILY_ALLOWED_HOSTS=maa.home.nightabyss.com
 Restart=on-failure
 RestartSec=10
 UMask=0077

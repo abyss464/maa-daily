@@ -328,7 +328,10 @@ async function refresh() {
   $('#b-stop').classList.toggle('hide', !(busy && S.busy.kind === 'run'));
   $('#b-stop').disabled = Boolean(S.busy?.stopping);
   const v = $('#viewer');
-  v.classList.toggle('hide', !(g.viewer && g.status === 'ready'));
+  // The pool's viewer listens on the host's loopback, so it opens only from a page served there, not through a proxy.
+  const loopback = (h) => ['127.0.0.1', 'localhost', '[::1]'].includes(h);
+  const reachable = g.viewer && (!loopback(new URL(g.viewer).hostname) || loopback(location.hostname));
+  v.classList.toggle('hide', !(reachable && g.status === 'ready'));
   if (g.viewer) v.href = g.viewer;
   if (S.notice && S.notice.at !== refresh.lastNotice) {
     if (refresh.lastNotice !== undefined) toast(S.notice.msg, !S.notice.ok);
