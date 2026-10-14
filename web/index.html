@@ -133,13 +133,20 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
 .toast { position: fixed; right: 16px; bottom: 16px; background: var(--panel2); border: 1px solid var(--line2); border-left: 3px solid var(--accent); padding: 10px 14px; max-width: min(420px, calc(100vw - 32px)); z-index: 10; }
 .toast.bad { border-left-color: var(--bad); }
 .empty { padding: 28px 16px; text-align: center; color: var(--faint); }
+
+/* game cards */
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.kv dt { color: var(--faint); font: 11px var(--mono); letter-spacing: .1em; padding-top: 2px; }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+details.pb summary { margin-bottom: 4px; }
+details.pb p { margin: 8px 0 0; }
 .hide { display: none !important; }
 </style>
 </head>
 <body>
 <header>
   <div class="wrap bar">
-    <div class="mark"><i></i>MAA 日常 <small>ARKNIGHTS · DAILY</small></div>
+    <div class="mark"><i></i>MAA 日常 <small>ARKNIGHTS · ENDFIELD</small></div>
     <nav id="nav">
       <button data-tab="home" class="on">总览</button>
       <button data-tab="accounts">账号</button>
@@ -151,76 +158,64 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
 
 <div class="wrap">
   <div class="strip">
-    <div class="cell"><div class="label">Windows</div><div class="val" id="s-guest">—</div></div>
-    <div class="cell"><div class="label">任务</div><div class="val" id="s-busy">—</div></div>
     <div class="cell"><div class="label">电脑</div><div class="val" id="s-idle">—</div></div>
+    <div class="cell"><div class="label">任务</div><div class="val" id="s-busy">—</div></div>
     <div class="cell"><div class="label">下次运行</div><div class="val" id="s-next">—</div></div>
-    <div class="cell"><div class="label">启用账号</div><div class="val" id="s-acc">—</div></div>
+    <div class="cell"><div class="label">账号</div><div class="val" id="s-acc">—</div></div>
   </div>
 
   <!-- overview -->
   <section id="tab-home" class="grid">
     <div class="stack">
       <div class="panel">
-        <div class="ph"><h2>控制</h2><span class="sub">CONTROL</span></div>
-        <div class="pb actions">
-          <button class="btn primary" id="b-run">立即运行全部账号</button>
-          <button class="btn danger hide" id="b-stop">停止</button>
-          <button class="btn" id="b-prepare">打开明日方舟（用于登录）</button>
-          <button class="btn hide" id="b-prepare-ef">打开终末地（用于操作）</button>
-          <button class="btn hide" id="b-close-ef">关闭终末地</button>
-          <button class="btn" id="b-shutdown">关机</button>
-        </div>
+        <div class="ph"><h2>运行</h2><span class="sub">RUN</span>
+          <div class="right"><button class="btn danger sm hide" id="b-stop">停止</button><button class="btn primary sm" id="b-run">立即运行全部账号</button></div></div>
+        <div id="recent"></div>
+      </div>
+      <div id="games" class="stack"></div>
+    </div>
+    <div class="stack">
+      <div class="panel">
+        <div class="ph"><h2>画面</h2><span class="sub" id="screen-src">SCREEN</span>
+          <div class="right"><a class="btn sm hide" id="viewer" target="_blank" rel="noopener">远程操作</a></div></div>
+        <div class="screen" id="screen">没有运行中的游戏</div>
+        <div class="pb hint">画面每 5 秒刷新。需要点击或输入时（登录、游戏里的新手引导）用「远程操作」。</div>
       </div>
       <div class="panel">
-        <div class="ph"><h2>统计</h2><span class="sub">STATISTICS · 30 DAYS</span></div>
+        <div class="ph"><h2>统计</h2><span class="sub">30 DAYS</span></div>
         <div class="kpis">
           <div class="kpi"><div class="label">运行次数</div><b id="k-runs">0</b></div>
           <div class="kpi"><div class="label">全部成功</div><b id="k-ok">—</b></div>
+          <div class="kpi"><div class="label">完成任务</div><b id="k-tasks">0</b></div>
           <div class="kpi"><div class="label">作战场次</div><b id="k-battles">0</b></div>
-          <div class="kpi"><div class="label">公招次数</div><b id="k-recruits">0</b></div>
         </div>
         <div class="chart">
-          <div class="label" style="margin-bottom:8px">每日作战场次</div>
+          <div class="label" style="margin-bottom:8px">每日完成任务</div>
           <div class="bars" id="bars"></div>
           <div class="axis"><span id="ax0"></span><span id="ax1"></span></div>
         </div>
         <div class="scroll"><table id="acc-stats"></table></div>
       </div>
     </div>
-    <div class="stack">
-      <div class="panel">
-        <div class="ph"><h2>画面</h2><span class="sub">SCREEN</span>
-          <div class="right"><a class="btn sm hide" id="viewer" target="_blank" rel="noopener">远程操作</a></div></div>
-        <div class="screen" id="screen">WINDOWS 未运行</div>
-        <div class="pb hint" id="screen-hint">画面每 5 秒刷新。需要点击或输入时（例如账号第一次登录）用「远程操作」。</div>
-      </div>
-      <div class="panel">
-        <div class="ph"><h2>最近运行</h2><span class="sub">RECENT</span></div>
-        <div id="recent"></div>
-      </div>
-    </div>
   </section>
 
   <!-- accounts -->
   <section id="tab-accounts" class="hide stack">
-    <div class="panel">
-      <div class="ph"><h2>账号</h2><span class="sub">ACCOUNTS · 按顺序运行</span>
-        <div class="right"><select id="add-game" style="width:auto;padding:3px 8px"><option value="arknights">明日方舟</option><option value="endfield">明日方舟：终末地</option></select><button class="btn primary sm" id="b-add">添加账号</button></div></div>
-      <div id="acc-list"></div>
+    <div class="panel" data-group="arknights">
+      <div class="ph"><h2>明日方舟</h2><span class="sub">ARKNIGHTS · WINDOWS 虚拟机里的 MuMu</span>
+        <div class="right"><button class="btn primary sm" data-add="arknights">添加账号</button></div></div>
+      <div class="acc-list" data-list="arknights"></div>
+      <details class="pb hint"><summary>新账号第一次登录</summary>
+        <p>MAA 只能在这台模拟器上登录过的账号之间切换，所以每个账号要先手动登录一次：在总览的明日方舟卡片里点「打开游戏」，再点「远程操作」，在游戏里登录。然后把登录界面账号列表里显示的登录名（官服如 <code>138****1234</code>，B 服是昵称）填进账号的「登录名」，填其中唯一的一段即可，例如手机号后四位。只有一个账号时登录名可以留空。</p>
+      </details>
     </div>
-    <div class="panel">
-      <div class="ph"><h2>新账号第一次登录</h2><span class="sub">FIRST LOGIN</span></div>
-      <div class="pb hint">
-        MAA 只能在<b>这台模拟器上登录过</b>的账号之间切换，所以每个账号要先手动登录一次：
-        <ol>
-          <li>在总览点「打开游戏（用于登录）」，等 Windows 和游戏打开。</li>
-          <li>点「远程操作」，在游戏里登录这个账号（第一次打开游戏时还要同意游戏的用户协议、等待资源下载）。</li>
-          <li>把登录界面账号列表里显示的登录名（官服如 <code>138****1234</code>，B 服是昵称）填进账号的「登录名」，填其中一段唯一的部分即可，例如手机号后四位。</li>
-        </ol>
-        只有一个账号时登录名可以留空，MAA 就不切换账号。
-        <p style="margin:12px 0 0"><b>终末地</b>：游戏用的是 Lutris 里那个前缀，在 Lutris 里正常打开游戏、登录一次即可，登录状态和自动运行共用。多个终末地账号都要在这台电脑上登录过，并填上各自的手机号后四位，MaaEnd 用它在登录界面切换。你自己在玩时，自动运行会跳过终末地。</p>
-      </div>
+    <div class="panel" data-group="endfield">
+      <div class="ph"><h2>明日方舟：终末地</h2><span class="sub">ENDFIELD · LUTRIS 前缀 + 屏幕池</span>
+        <div class="right"><button class="btn primary sm" data-add="endfield">添加账号</button></div></div>
+      <div class="acc-list" data-list="endfield"></div>
+      <details class="pb hint"><summary>新账号第一次登录</summary>
+        <p>游戏用的是 Lutris 里的那个前缀，登录状态和你自己玩时共用。在总览的终末地卡片里点「打开游戏」，用「远程操作」登录，也可以直接在 Lutris 里打开游戏登录。多个账号都要在这台电脑上登录过，并填上各自的手机号后四位，MaaEnd 用它在登录界面切换。新账号的新手引导 MaaEnd 处理不了，第一次跑之前在远程操作里点掉。你自己在玩时，自动运行会跳过终末地。</p>
+      </details>
     </div>
   </section>
 
@@ -245,23 +240,40 @@ pre.log { margin: 0; padding: 14px 16px; font: 12px/1.6 var(--mono); white-space
       <div class="pb form" style="padding-top:16px">
         <label class="check"><input type="checkbox" id="st-enabled"> 电脑空闲时自动运行待运行的账号</label>
         <div class="row">
-          <label class="field"><span>CPU 占用不超过（%）</span><input type="number" id="st-cpu" min="1" max="100"><small>全部核心的平均值，不含 Windows 虚拟机自身</small></label>
-          <label class="field"><span>GPU 占用不超过（%）</span><input type="number" id="st-gpu" min="1" max="100"></label>
-          <label class="field"><span>虚拟机内存之外至少还空（GB）</span><input type="number" id="st-mem" min="0" max="256"></label>
+          <label class="field"><span>CPU 占用不超过（%）</span><input type="number" id="st-cpu" min="1" max="100"><small>全部核心的平均值，不含运行自身（虚拟机、终末地和 MaaEnd）</small></label>
+          <label class="field"><span>GPU 占用不超过（%）</span><input type="number" id="st-gpu" min="1" max="100"><small>同样不含运行自身</small></label>
+          <label class="field"><span>运行所需之外至少还空（GB）</span><input type="number" id="st-mem" min="0" max="256"></label>
           <label class="field"><span>持续多久算空闲（分钟）</span><input type="number" id="st-idle" min="1" max="240"><small>以上条件在这段时间内的平均值都满足</small></label>
-          <label class="field"><span>同一账号两次运行至少间隔（小时）</span><input type="number" id="st-interval" min="1" max="48"><small>每天 04:00（北京时间）刷新后会再运行一次；理智约 13 小时回满</small></label>
-          <label class="field"><span>失败后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"></label>
         </div>
         <label class="check"><input type="checkbox" id="st-yield"> 占用持续 2 分钟超过上限时停止闲时运行，没做完的账号下次空闲时继续</label>
-        <label class="check"><input type="checkbox" id="st-shutdown"> 运行结束后关闭模拟器和 Windows（只在本次运行开机时才关）</label>
-        <label class="check"><input type="checkbox" id="st-close"> 最后一个账号完成后关闭游戏</label>
-        <div class="row">
-          <label class="field"><span>单个账号最长运行（分钟）</span><input type="number" id="st-timeout" min="5" max="600"></label>
-          <label class="field"><span>Windows 虚拟机名称</span><input type="text" id="st-instance"><small>Windows 虚拟机池里的实例名</small></label>
-        </div>
-        <div><button class="btn primary" id="st-save">保存</button> <span class="err" id="st-err"></span></div>
       </div>
     </div>
+    <div class="panel">
+      <div class="ph"><h2>账号运行</h2><span class="sub">ACCOUNTS</span></div>
+      <div class="pb form" style="padding-top:16px">
+        <div class="row">
+          <label class="field"><span>同一账号两次运行至少间隔（小时）</span><input type="number" id="st-interval" min="1" max="48"><small>每天 04:00（北京时间）刷新后还会再运行一次</small></label>
+          <label class="field"><span>失败后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"></label>
+          <label class="field"><span>单个账号最长运行（分钟）</span><input type="number" id="st-timeout" min="5" max="600"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="st-close"> 最后一个账号完成后关闭游戏</label>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph"><h2>明日方舟</h2><span class="sub">WINDOWS 虚拟机</span></div>
+      <div class="pb form" style="padding-top:16px">
+        <div class="row"><label class="field"><span>Windows 虚拟机名称</span><input type="text" id="st-instance"><small>Windows 虚拟机池里的实例名</small></label></div>
+        <label class="check"><input type="checkbox" id="st-shutdown"> 运行结束后关闭模拟器和 Windows（只在本次运行开机时才关）</label>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="ph"><h2>明日方舟：终末地</h2><span class="sub">LUTRIS · MAAEND</span></div>
+      <div class="pb form" style="padding-top:16px">
+        <div class="row"><label class="field"><span>Lutris 游戏</span><input type="text" id="st-lutris"><small>装着终末地的 Lutris 游戏（官方启动器那一项）的标识；前缀、Wine 和环境变量每次都从 Lutris 读取</small></label></div>
+        <div class="hint" id="st-maaend"></div>
+      </div>
+    </div>
+    <div><button class="btn primary" id="st-save">保存设置</button> <span class="err" id="st-err"></span></div>
   </section>
 </div>
 
@@ -310,54 +322,101 @@ function tab(name) {
 $('#nav').onclick = (e) => e.target.dataset.tab && tab(e.target.dataset.tab);
 
 // ---- state ----
+const GAME_LABEL = { arknights: '明日方舟', endfield: '明日方舟：终末地' };
+const gameOf = (a) => a.game || 'arknights';
+const loopback = (h) => ['127.0.0.1', 'localhost', '[::1]'].includes(h);
+// A viewer that listens on the host's loopback opens only from a page served there, not through a proxy.
+const reachable = (url) => url && (!loopback(new URL(url).hostname) || loopback(location.hostname));
+const dotted = (kind, text) => `<span class="dot ${kind}"></span>${text}`;
+
 async function refresh() {
-  try { S = await api('GET', '/api/state'); } catch (e) { $('#s-guest').innerHTML = `<span class="dot bad"></span>${esc(e.message)}`; return; }
-  const g = S.guest;
-  const gs = !g.exists ? (g.error || '找不到虚拟机') : (GUEST[g.status] || g.status);
-  $('#s-guest').innerHTML = `<span class="dot ${g.status === 'ready' ? 'good' : ['starting', 'stopping', 'preparing'].includes(g.status) ? 'busy' : g.exists ? '' : 'bad'}"></span>${esc(gs)}`;
-  $('#s-busy').innerHTML = S.busy ? `<span class="dot busy"></span>${esc(S.busy.stage || S.busy.label)}` : '<span class="dot"></span>空闲';
+  try { S = await api('GET', '/api/state'); } catch (e) { $('#s-busy').innerHTML = dotted('bad', esc(e.message)); return; }
   const id = S.idle;
-  const load = id.cpu === null ? '' : `CPU ${id.cpu}% · GPU ${id.gpu ?? '—'}% · 内存可用 ${id.memFreeGb} GB`;
-  $('#s-idle').innerHTML = !id.available ? `<span class="dot bad"></span>${esc(id.error || '无法读取负载')}`
-    : `<span class="dot ${id.idle ? 'good' : ''}"></span>${id.idle ? '空闲' : '忙'}　<span class="hint">${esc(load)}</span>`;
+  const load = id.cpu === null ? '' : `CPU ${id.cpu}% · GPU ${id.gpu ?? '—'}% · 可用内存 ${id.memFreeGb} GB`;
+  $('#s-idle').innerHTML = !id.available ? dotted('bad', esc(id.error || '无法读取负载'))
+    : `${dotted(id.idle ? 'good' : '', id.idle ? '空闲' : '忙')}　<span class="hint">${esc(load)}</span>`;
   $('#s-idle').title = id.idle ? `${fmt(id.since)} 起空闲` : (id.reasons || []).join('；');
+  $('#s-busy').innerHTML = S.busy ? dotted('busy', esc(S.busy.stage || S.busy.label)) : dotted('', '空闲');
   const dueN = S.accounts.filter((a) => S.due[a.id]?.due).length;
   $('#s-next').textContent = !S.settings.enabled ? '自动运行已关闭'
     : S.nextDue === 'now' ? `${dueN} 个账号待运行，${id.idle ? '即将开始' : `空闲 ${S.settings.idleMinutes} 分钟后开始`}` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
-  $('#s-acc').textContent = `${S.accounts.filter((a) => a.enabled).length} / ${S.accounts.length}`;
+  const enabled = S.accounts.filter((a) => a.enabled);
+  const doneToday = enabled.filter((a) => !S.due[a.id]?.due && S.due[a.id]?.lastOk).length;
+  $('#s-acc').textContent = `${enabled.length} 个启用 · ${doneToday} 个已完成`;
   const busy = Boolean(S.busy);
-  $('#b-run').disabled = busy || !S.accounts.some((a) => a.enabled);
-  $('#b-prepare').disabled = busy;
-  const hasEf = S.accounts.some((a) => a.game === 'endfield');
-  $('#b-prepare-ef').classList.toggle('hide', !hasEf || Boolean(S.screen?.manual));
-  $('#b-prepare-ef').disabled = busy;
-  $('#b-close-ef').classList.toggle('hide', !S.screen?.manual);
-  $('#b-close-ef').disabled = busy;
-  $('#b-shutdown').disabled = busy || g.status !== 'ready';
+  $('#b-run').disabled = busy || !enabled.length;
   $('#b-stop').classList.toggle('hide', !(busy && S.busy.kind === 'run'));
   $('#b-stop').disabled = Boolean(S.busy?.stopping);
+  renderGames();
+  // The screen on show: Endfield's pool screen, else the Windows guest's.
   const v = $('#viewer');
-  // The pool's viewer listens on the host's loopback, so it opens only from a page served there, not through a proxy.
-  const loopback = (h) => ['127.0.0.1', 'localhost', '[::1]'].includes(h);
-  // A pool screen on show (Endfield) has the pool's viewer; otherwise the guest's.
-  const target = S.screen?.vnc ? S.screen.viewer : g.status === 'ready' ? g.viewer : null;
-  const reachable = target && (!loopback(new URL(target).hostname) || loopback(location.hostname));
-  v.classList.toggle('hide', !reachable);
+  const target = S.screen ? (S.screen.vnc ? S.screen.viewer : null) : S.guest.status === 'ready' ? S.guest.viewer : null;
+  v.classList.toggle('hide', !reachable(target));
   if (target) v.href = target;
+  $('#screen-src').textContent = S.screen ? `终末地 · 屏幕 ${S.screen.id}` : S.guest.status === 'ready' ? '明日方舟 · WINDOWS' : 'SCREEN';
   if (S.notice && S.notice.at !== refresh.lastNotice) {
     if (refresh.lastNotice !== undefined) toast(S.notice.msg, !S.notice.ok);
     refresh.lastNotice = S.notice.at;
   } else if (refresh.lastNotice === undefined) refresh.lastNotice = S.notice?.at ?? null;
-  if (!open.size && !document.activeElement?.closest('#acc-list')) renderAccounts(false);
+  if (!open.size && !document.activeElement?.closest('.acc-list')) renderAccounts(false);
   if (busy !== refresh.wasBusy) { refresh.wasBusy = busy; loadStats(); loadRecent(); if (!$('#tab-runs').classList.contains('hide')) loadRuns(); }
 }
 
+// One card per game: where it runs, its accounts today, and what a person can do with it.
+function renderGames() {
+  const busy = Boolean(S.busy);
+  const card = (game, rows, actions) => {
+    const accs = S.accounts.filter((a) => gameOf(a) === game && a.enabled);
+    const done = accs.filter((a) => !S.due[a.id]?.due && S.due[a.id]?.lastOk).length;
+    return `<div class="panel"><div class="ph"><h2>${GAME_LABEL[game]}</h2><span class="sub">${accs.length ? `${done}/${accs.length} 个账号今天已完成` : '没有启用的账号'}</span>
+      <div class="right">${actions}</div></div><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div>`;
+  };
+  const g = S.guest;
+  const guestState = !g.exists ? dotted('bad', esc(g.error || '找不到虚拟机')) : dotted(g.status === 'ready' ? 'good' : ['starting', 'stopping', 'preparing'].includes(g.status) ? 'busy' : '', GUEST[g.status] || g.status);
+  const ak = card('arknights', [
+    ['环境', `Windows 虚拟机 ${esc(S.settings.instance)} · MuMu · MAA`],
+    ['虚拟机', guestState],
+  ], `${g.status === 'ready' && reachable(g.viewer) ? `<a class="btn sm" href="${esc(g.viewer)}" target="_blank" rel="noopener">远程操作</a>` : ''}
+     <button class="btn sm" data-game-act="open-ak" ${busy ? 'disabled' : ''}>打开游戏</button>
+     <button class="btn sm" data-game-act="shutdown" ${busy || g.status !== 'ready' ? 'disabled' : ''}>关机</button>`);
+  const e = S.games?.endfield || {};
+  const sc = e.screen;
+  const efState = sc ? dotted('busy', sc.manual ? `已打开，屏幕 ${sc.id}（手动）` : `运行中，屏幕 ${sc.id}`)
+    : e.lutris?.playing ? dotted('good', '正在运行（不是这里打开的，可能你在玩）') : dotted('', '未运行');
+  const ef = card('endfield', [
+    ['环境', e.lutris?.error ? dotted('bad', esc(e.lutris.error)) : `Lutris ${esc(e.lutris?.slug || '')} · ${esc(e.lutris?.wine || '')} · 屏幕池`],
+    ['MaaEnd', e.maaend?.available ? `自维护分支${e.maaend.version ? ` ${esc(e.maaend.version)}` : ''}` : dotted('bad', esc(e.maaend?.error || '不可用'))],
+    ['游戏', efState],
+  ], `${sc?.vnc && reachable(sc.viewer) ? `<a class="btn sm" href="${esc(sc.viewer)}" target="_blank" rel="noopener">远程操作</a>` : ''}
+     ${sc?.manual ? `<button class="btn sm" data-game-act="close-ef" ${busy ? 'disabled' : ''}>关闭游戏</button>`
+       : `<button class="btn sm" data-game-act="open-ef" ${busy || sc || e.lutris?.playing ? 'disabled' : ''}>打开游戏</button>`}`);
+  const html = ak + ef;
+  if (html !== renderGames.html) { $('#games').innerHTML = html; renderGames.html = html; }
+}
+$('#games').addEventListener('click', act(async (e) => {
+  const b = e.target.closest('[data-game-act]');
+  if (!b) return;
+  const k = b.dataset.gameAct;
+  if (k === 'open-ak') {
+    const types = [...new Set(S.accounts.filter((a) => gameOf(a) === 'arknights').map((a) => a.client_type))];
+    const ct = types.includes('Bilibili') && types.includes('Official') ? (confirm('打开 B 服客户端？（取消则打开官服）') ? 'Bilibili' : 'Official') : types[0] || 'Official';
+    await api('POST', '/api/prepare', { client_type: ct }); toast('正在打开 Windows 和明日方舟');
+  } else if (k === 'shutdown') {
+    if (!confirm('关闭模拟器和 Windows？')) return;
+    await api('POST', '/api/shutdown');
+  } else if (k === 'open-ef') {
+    await api('POST', '/api/prepare', { client_type: 'endfield' }); toast('正在打开终末地');
+  } else if (k === 'close-ef') {
+    await api('POST', '/api/close-endfield');
+  }
+  refresh();
+}));
+
 // ---- screen ----
 async function screen() {
-  // Endfield's pool screen while it plays, else the Windows guest's screen.
   const live = S?.screen || S?.guest?.status === 'ready';
   if (document.hidden || $('#tab-home').classList.contains('hide') || !live) {
-    if (S && !live) $('#screen').innerHTML = `WINDOWS ${esc((GUEST[S.guest.status] || '未运行'))}`;
+    if (S && !live) $('#screen').innerHTML = '没有运行中的游戏';
     return;
   }
   try {
@@ -366,7 +425,7 @@ async function screen() {
     const url = URL.createObjectURL(await r.blob());
     const el = $('#screen');
     let img = $('img', el);
-    if (!img) { el.innerHTML = '<img alt="Windows 画面">'; img = $('img', el); }
+    if (!img) { el.innerHTML = '<img alt="游戏画面">'; img = $('img', el); }
     const old = img.src; img.src = url; if (old.startsWith('blob:')) URL.revokeObjectURL(old);
   } catch {}
 }
@@ -377,15 +436,19 @@ async function loadStats() {
   if (!st) return;
   $('#k-runs').textContent = st.runs;
   $('#k-ok').textContent = st.runs ? `${Math.round(st.ok / st.runs * 100)}%` : '—';
+  $('#k-tasks').textContent = st.accounts.reduce((s, a) => s + (a.tasksDone || 0), 0);
   $('#k-battles').textContent = st.accounts.reduce((s, a) => s + a.battles, 0);
-  $('#k-recruits').textContent = st.accounts.reduce((s, a) => s + a.recruits, 0);
-  const max = Math.max(1, ...st.daily.map((d) => d.battles));
-  $('#bars').innerHTML = st.daily.map((d) => `<div class="${d.battles ? '' : 'zero'}" style="height:${Math.max(2, d.battles / max * 100)}%" title="${d.day}：作战 ${d.battles} 场，运行 ${d.runs} 次"></div>`).join('');
+  const max = Math.max(1, ...st.daily.map((d) => d.tasks || 0));
+  $('#bars').innerHTML = st.daily.map((d) => `<div class="${d.tasks ? '' : 'zero'}" style="height:${Math.max(2, (d.tasks || 0) / max * 100)}%" title="${d.day}：完成任务 ${d.tasks || 0} 项，作战 ${d.battles} 场，运行 ${d.runs} 次"></div>`).join('');
   $('#ax0').textContent = st.daily[0]?.day.slice(5) || ''; $('#ax1').textContent = '今天';
-  $('#acc-stats').innerHTML = st.accounts.length ? `<tr><th>账号</th><th class="num">成功/运行</th><th class="num">作战</th><th class="num">公招</th><th>最近成功</th></tr>` +
+  $('#acc-stats').innerHTML = st.accounts.length ? '<tr><th>账号</th><th class="num">成功/运行</th><th class="num">完成任务</th><th>最近成功</th></tr>' +
     st.accounts.map((a) => {
-      const top = Object.entries(a.drops).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${esc(k)}×${v}`).join('　');
-      return `<tr><td>${esc(a.name)}${top ? `<div class="drops">${top}</div>` : ''}</td><td class="num">${a.ok}/${a.runs}</td><td class="num">${a.battles}</td><td class="num">${a.recruits}</td><td>${fmt(a.lastOk)}</td></tr>`;
+      const detail = a.game === 'endfield'
+        ? Object.values(a.tasks || {}).map((t) => `${esc(t.label)} ${t.done}${t.failed ? `<span class="err">/${t.failed}</span>` : ''}`).join('　')
+        : [a.battles ? `作战 ${a.battles} 场` : '', a.recruits ? `公招 ${a.recruits} 次` : '',
+          ...Object.entries(a.drops).sort((x, y) => y[1] - x[1]).slice(0, 5).map(([k, v]) => `${esc(k)}×${v}`)].filter(Boolean).join('　');
+      return `<tr><td>${esc(a.name)} <span class="chip">${a.game === 'endfield' ? '终末地' : '明日方舟'}</span>${detail ? `<div class="drops">${detail}</div>` : ''}</td>
+        <td class="num">${a.ok}/${a.runs}</td><td class="num">${a.tasksDone || 0}</td><td>${fmt(a.lastOk)}</td></tr>`;
     }).join('') : '<tr><td class="empty">还没有运行记录</td></tr>';
 }
 
@@ -413,10 +476,15 @@ async function showRun(id, quiet) {
   $('#run-detail-panel').style.display = '';
   $('#rd-title').textContent = `运行 ${fmt(r.startedAt)} · ${STATUS[r.status] || r.status}`;
   const accs = (r.order || Object.keys(r.accounts)).map((k) => r.accounts[k]).filter(Boolean);
-  $('#rd-table').innerHTML = accs.length ? '<tr><th>账号</th><th>状态</th><th class="num">用时</th><th class="num">作战</th><th>关卡</th><th>掉落</th></tr>' + accs.map((a) =>
-    `<tr><td>${esc(a.name)}</td><td><span class="chip ${a.status}">${STATUS[a.status] || a.status}</span></td><td class="num">${a.seconds ? Math.round(a.seconds / 60) + ' 分' : ''}</td>` +
-    `<td class="num">${a.battles}</td><td>${Object.entries(a.stages).map(([k, v]) => `${esc(k)}×${v}`).join(' ')}</td>` +
-    `<td class="drops">${Object.entries(a.drops).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${esc(k)}×${v}`).join('　')}</td></tr>`).join('') : '';
+  const CHAIN = { StartUp: '开始唤醒', AccountSwitch: '切换账号', CloseDown: '关闭游戏', ...TASKS };
+  $('#rd-table').innerHTML = accs.length ? '<tr><th>账号</th><th>状态</th><th class="num">用时</th><th>任务</th><th>作战与掉落</th></tr>' + accs.map((a) => {
+    const chains = Object.entries(a.chains || {}).filter(([c]) => c !== 'CloseDown')
+      .map(([c, st]) => `<span class="chip ${st === 'done' ? 'ok' : st === 'error' ? 'failed' : 'running'}">${esc(a.chainLabels?.[c] || CHAIN[c] || c)}</span>`).join('');
+    const fights = [a.battles ? `作战 ${a.battles} 场（${Object.entries(a.stages).map(([k, v]) => `${esc(k)}×${v}`).join(' ')}）` : '',
+      ...Object.entries(a.drops).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${esc(k)}×${v}`)].filter(Boolean).join('　');
+    return `<tr><td>${esc(a.name)} <span class="chip">${a.game === 'endfield' ? '终末地' : '明日方舟'}</span></td><td><span class="chip ${a.status}">${STATUS[a.status] || a.status}</span></td>` +
+      `<td class="num">${a.seconds ? Math.round(a.seconds / 60) + ' 分' : ''}</td><td>${chains}</td><td class="drops">${fights}</td></tr>`;
+  }).join('') : '';
   const log = $('#rd-log');
   const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
   log.textContent = r.log || '（没有日志）';
@@ -485,34 +553,38 @@ function editor(a) {
   </div>`;
 }
 function renderAccounts(force = true) {
-  if (!S || !defaults) return;
-  const el = $('#acc-list');
+  if (!S || !G) return;
   // Redraw only when what is shown changed: a redraw replaces the buttons under the pointer.
   const sig = JSON.stringify([S.accounts, S.due, Boolean(S.busy), [...open]]);
   if (!force && sig === renderAccounts.sig) return;
   renderAccounts.sig = sig;
-  if (!S.accounts.length) { el.innerHTML = '<div class="empty">还没有账号，点「添加账号」</div>'; return; }
-  el.innerHTML = S.accounts.map((a, i) => {
-    const ef = (a.game || 'arknights') === 'endfield';
-    const label = (k) => (ef ? G.endfield.tasks.find((t) => t.name === k)?.label : TASKS[k]) || k;
-    const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => label(k));
-    const d = S.due?.[a.id] || {};
-    const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
-      : d.retryAt ? ` · 上次失败，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
-    return `<div class="acc ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
-      <div class="acc-head">
-        <label class="check" title="参与定时运行"><input type="checkbox" data-act="toggle" ${a.enabled ? 'checked' : ''}></label>
-        <span class="name">${esc(a.name)}</span>
-        <span class="meta"><span class="chip">${ef ? '终末地' : '明日方舟'}</span>${ef ? '' : `${CLIENT[a.client_type] || a.client_type} · `}${a.account_name ? esc(a.account_name) : '不切换账号'} · ${on.join('、') || '无任务'}${when}</span>
-        <span class="right">
-          <button class="btn sm" data-act="up" ${i ? '' : 'disabled'} title="上移">↑</button>
-          <button class="btn sm" data-act="down" ${i < S.accounts.length - 1 ? '' : 'disabled'} title="下移">↓</button>
-          <button class="btn sm" data-act="runone" ${S.busy ? 'disabled' : ''}>只运行它</button>
-          <button class="btn sm" data-act="edit">${open.has(a.id) ? '收起' : '编辑'}</button>
-          <button class="btn sm danger" data-act="del">删除</button>
-        </span>
-      </div>${open.has(a.id) ? editor(a) : ''}</div>`;
-  }).join('');
+  for (const game of ['arknights', 'endfield']) {
+    const list = S.accounts.filter((a) => gameOf(a) === game);
+    const el = $(`[data-list=${game}]`);
+    if (!list.length) { el.innerHTML = '<div class="empty">还没有账号</div>'; continue; }
+    el.innerHTML = list.map((a) => {
+      const ef = game === 'endfield';
+      const label = (k) => (ef ? G.endfield.tasks.find((t) => t.name === k)?.label : TASKS[k]) || k;
+      const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => label(k));
+      const d = S.due?.[a.id] || {};
+      const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
+        : d.retryAt ? ` · 上次失败，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
+      const i = list.indexOf(a);
+      return `<div class="acc ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
+        <div class="acc-head">
+          <label class="check" title="参与自动运行"><input type="checkbox" data-act="toggle" ${a.enabled ? 'checked' : ''}></label>
+          <span class="name">${esc(a.name)}</span>
+          <span class="meta">${ef ? '' : `${CLIENT[a.client_type] || a.client_type} · `}${a.account_name ? esc(a.account_name) : '不切换账号'} · ${on.join('、') || '无任务'}${when}</span>
+          <span class="right">
+            <button class="btn sm" data-act="up" ${i ? '' : 'disabled'} title="上移">↑</button>
+            <button class="btn sm" data-act="down" ${i < list.length - 1 ? '' : 'disabled'} title="下移">↓</button>
+            <button class="btn sm" data-act="runone" ${S.busy ? 'disabled' : ''}>只运行它</button>
+            <button class="btn sm" data-act="edit">${open.has(a.id) ? '收起' : '编辑'}</button>
+            <button class="btn sm danger" data-act="del">删除</button>
+          </span>
+        </div>${open.has(a.id) ? editor(a) : ''}</div>`;
+    }).join('');
+  }
 }
 function collect(form, base) {
   const raw = $('[data-f=raw]', form);
@@ -538,19 +610,33 @@ function collect(form, base) {
   }
   return { name: $('[data-f=name]', form).value, client_type: $('[data-f=client_type]', form).value, account_name: $('[data-f=account_name]', form).value, tasks };
 }
-$('#acc-list').addEventListener('input', (e) => {
+$('#tab-accounts').addEventListener('input', (e) => {
   if (e.target.dataset.f === 'raw') e.target.dataset.dirty = '1';
   const t = e.target.closest('[data-task]');
   if (t && e.target.dataset.k === 'enable') t.classList.toggle('off', !e.target.checked);
 });
-$('#acc-list').addEventListener('click', act(async (e) => {
+$('#tab-accounts').addEventListener('click', act(async (e) => {
+  const add = e.target.closest('[data-add]');
+  if (add) {
+    const game = add.dataset.add;
+    const n = S.accounts.filter((x) => gameOf(x) === game).length + 1;
+    const a = await api('POST', '/api/accounts', { game, name: `${game === 'endfield' ? '终末地' : '明日方舟'}账号 ${n}`, client_type: 'Official' });
+    open.add(a.id); await refresh(); renderAccounts();
+    return;
+  }
   const b = e.target.closest('[data-act]');
   if (!b) return;
   const id = b.closest('[data-id]').dataset.id;
   const a = S.accounts.find((x) => x.id === id);
   const k = b.dataset.act;
   if (k === 'toggle') { await api('PUT', `/api/accounts/${id}`, { enabled: b.checked }); }
-  else if (k === 'up' || k === 'down') { await api('POST', `/api/accounts/${id}/move`, { dir: k === 'up' ? -1 : 1 }); }
+  else if (k === 'up' || k === 'down') {
+    // Accounts run in list order; within a game the neighbour may sit past another game's accounts.
+    const same = S.accounts.filter((x) => gameOf(x) === gameOf(a));
+    const other = same[same.indexOf(a) + (k === 'up' ? -1 : 1)];
+    const steps = Math.abs(S.accounts.indexOf(other) - S.accounts.indexOf(a));
+    for (let n = 0; n < steps; n++) await api('POST', `/api/accounts/${id}/move`, { dir: k === 'up' ? -1 : 1 });
+  }
   else if (k === 'edit' || k === 'cancel') { open.has(id) ? open.delete(id) : open.add(id); renderAccounts(); return; }
   else if (k === 'del') { if (!confirm(`删除账号「${a.name}」？运行记录会保留。`)) return; await api('DELETE', `/api/accounts/${id}`); open.delete(id); }
   else if (k === 'runone') { await api('POST', '/api/run', { accounts: [id] }); toast(`开始运行：${a.name}`); }
@@ -562,26 +648,9 @@ $('#acc-list').addEventListener('click', act(async (e) => {
   }
   await refresh(); renderAccounts();
 }));
-$('#b-add').onclick = act(async () => {
-  const game = $('#add-game').value;
-  const a = await api('POST', '/api/accounts', { game, name: `${game === 'endfield' ? '终末地' : '明日方舟'}账号 ${(S?.accounts.length || 0) + 1}`, client_type: 'Official' });
-  open.add(a.id); await refresh(); renderAccounts(); tab('accounts');
-});
-
 // ---- controls ----
 $('#b-run').onclick = act(async () => { await api('POST', '/api/run', {}); toast('开始运行'); refresh(); });
 $('#b-stop').onclick = act(async () => { await api('POST', '/api/stop'); refresh(); });
-$('#b-prepare').onclick = act(async () => {
-  const types = [...new Set(S.accounts.filter((a) => (a.game || 'arknights') === 'arknights').map((a) => a.client_type))];
-  let ct = 'Official';
-  if (types.includes('Bilibili') && types.includes('Official')) ct = confirm('打开 B 服客户端？（取消则打开官服）') ? 'Bilibili' : 'Official';
-  else if (types.length === 1) ct = types[0];
-  await api('POST', '/api/prepare', { client_type: ct }); toast('正在打开 Windows 和游戏'); refresh();
-});
-$('#b-prepare-ef').onclick = act(async () => { await api('POST', '/api/prepare', { client_type: 'endfield' }); toast('正在打开终末地'); refresh(); });
-$('#b-close-ef').onclick = act(async () => { await api('POST', '/api/close-endfield'); refresh(); });
-$('#b-shutdown').onclick = act(async () => { if (!confirm('关闭模拟器和 Windows？')) return; await api('POST', '/api/shutdown'); refresh(); });
-
 // ---- settings ----
 function fillSettings() {
   if (!S) return;
@@ -590,6 +659,9 @@ function fillSettings() {
   $('#st-timeout').value = s.accountTimeoutMin; $('#st-instance').value = s.instance;
   $('#st-idle').value = s.idleMinutes; $('#st-interval').value = s.intervalHours; $('#st-retry').value = s.retryMinutes; $('#st-yield').checked = s.stopWhenBusy;
   $('#st-cpu').value = s.cpuMax; $('#st-gpu').value = s.gpuMax; $('#st-mem').value = s.memMarginGb;
+  $('#st-lutris').value = s.endfieldLutrisGame || '';
+  const m = S.games?.endfield?.maaend;
+  $('#st-maaend').innerHTML = m?.available ? `MaaEnd：自维护分支（~/Code/vendor/MaaEnd，maa-daily 分支）${m.version ? `，${esc(m.version)}` : ''}；重新构建后运行 <code>endfield/link-runtime.sh</code>。` : `<span class="err">MaaEnd 不可用：${esc(m?.error || '')}</span>`;
   $('#st-err').textContent = '';
 }
 $('#st-save').onclick = act(async () => {
@@ -597,7 +669,7 @@ $('#st-save').onclick = act(async () => {
     await api('PUT', '/api/settings', { enabled: $('#st-enabled').checked, idleMinutes: Number($('#st-idle').value), intervalHours: Number($('#st-interval').value),
       retryMinutes: Number($('#st-retry').value), stopWhenBusy: $('#st-yield').checked,
       cpuMax: Number($('#st-cpu').value), gpuMax: Number($('#st-gpu').value), memMarginGb: Number($('#st-mem').value), shutdownAfter: $('#st-shutdown').checked, closeGame: $('#st-close').checked,
-      accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value });
+      accountTimeoutMin: Number($('#st-timeout').value), instance: $('#st-instance').value, endfieldLutrisGame: $('#st-lutris').value });
   } catch (e) { $('#st-err').textContent = e.message; return; }
   toast('设置已保存'); await refresh(); fillSettings();
 });

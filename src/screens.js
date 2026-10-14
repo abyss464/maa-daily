@@ -34,9 +34,11 @@ function call(method, path, body, timeoutMs = 120_000) {
 }
 
 export const screens = {
-  // A temporary screen held by this service's process: it ends with the service, or after ttl.
-  open: ({ width = 1920, height = 1080, label, ttl }) =>
-    call('POST', '/api/screens', { width, height, owner: 'maa-daily', label, pid: process.pid, ttl }),
+  // A temporary screen, by default held by this service's process: it ends with the service, or
+  // after ttl. One opened for a person is not held, so a restart of the service keeps it.
+  open: ({ width = 1920, height = 1080, label, ttl, held = true }) =>
+    call('POST', '/api/screens', { width, height, owner: 'maa-daily', label, ...(held ? { pid: process.pid } : {}), ttl }),
+  list: () => call('GET', '/api/screens', undefined, 15_000).then((r) => r.screens),
   close: (id) => call('DELETE', `/api/screens/${encodeURIComponent(id)}`).catch(() => {}),
   get: (id) => call('GET', `/api/screens/${encodeURIComponent(id)}`, undefined, 15_000),
   launch: (id, command, waitSeconds = 90) =>

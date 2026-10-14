@@ -20,6 +20,7 @@ const EXE = 'Endfield.exe';
 // Processes carrying this mark are the run's own (the game, MaaEnd and its agents): the idle
 // judgement leaves their load out.
 export const OWN_MARK = 'MAA_DAILY_OWN=1';
+const MANUAL_LABEL = '终末地（手动）';
 
 // ---- MaaEnd's catalogue: tasks, their options and presets, with Chinese labels ----
 
@@ -177,12 +178,20 @@ export const endfield = {
     const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
     const gameDir = path.join(game.prefix, GAME_SUBDIR);
     if (prefixBusy(game.prefix, EXE)) throw new Error('终末地已经在运行');
-    const screen = await screens.open({ label: '终末地（手动）', ttl: 3 * 3600 });
+    const screen = await screens.open({ label: MANUAL_LABEL, ttl: 3 * 3600, held: false });
     const env = { ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all', DXVK_LOG_LEVEL: 'none', MAA_DAILY_OWN: '1' };
     const envArgs = Object.entries(env).map(([k, v]) => `${k}=${sh(v)}`).join(' ');
     await screens.launch(screen.id, `sh -c ${sh(`cd ${sh(gameDir)} && exec env ${envArgs} ${sh(game.wine)} ${EXE}`)}`, 90);
     this.manualScreen = screen.id;
     return screens.get(screen.id);
+  },
+
+  // After a restart of this service: the screen it had opened for a person, if still there.
+  async rediscover() {
+    try {
+      const found = (await screens.list()).find((x) => x.owner === 'maa-daily' && x.label === MANUAL_LABEL);
+      this.manualScreen = found?.id || null;
+    } catch {}
   },
 
   async closeForUser(settings) {

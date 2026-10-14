@@ -227,7 +227,7 @@ function judge() {
   const last = samples.at(-1);
   if (last) {
     idle.cpu = Math.round(last.cpu);
-    idle.gpu = last.gpu;
+    idle.gpu = last.gpu === null ? null : Math.round(last.gpu);
     idle.memFreeGb = Math.round(last.memFree / 2 ** 30);
   }
   const w = within(s.idleMinutes * 60_000);

@@ -29,6 +29,7 @@ import { config } from './config.js';
 import { store, runs, InputError } from './store.js';
 import { GAMES } from './games/index.js';
 import { screens } from './screens.js';
+import { lutrisGame, prefixBusy } from './lutris.js';
 import { orchestrator } from './orchestrator.js';
 import { startScheduler, idle, accountStatus, nextDue } from './scheduler.js';
 import { stats } from './stats.js';
@@ -92,6 +93,23 @@ async function poolScreen() {
   }
 }
 
+// Each game's environment as the page shows it.
+async function environments() {
+  const settings = store.settings();
+  const ef = GAMES.endfield.catalog();
+  let lutris = null;
+  try {
+    const g = lutrisGame(settings.endfieldLutrisGame);
+    lutris = { slug: g.slug, prefix: g.prefix, wine: path.basename(path.dirname(path.dirname(path.dirname(g.wine)))), playing: Boolean(prefixBusy(g.prefix, 'Endfield.exe')) };
+  } catch (e) {
+    lutris = { error: e.message };
+  }
+  return {
+    arknights: { guest: await guest() },
+    endfield: { maaend: { available: ef.available, version: ef.version, error: ef.error }, lutris, screen: await poolScreen() },
+  };
+}
+
 async function route(req, res, url) {
   const parts = url.pathname.split('/').filter(Boolean);
   const m = req.method;
@@ -106,7 +124,7 @@ async function route(req, res, url) {
     return send(res, 200, {
       settings: store.settings(), accounts: store.accounts(), busy: orchestrator.busy(),
       notice: orchestrator.lastNotice || null, guest: await guest(), idle, due: accountStatus(), nextDue: nextDue(),
-      screen: await poolScreen(),
+      screen: await poolScreen(), games: await environments(),
     });
   }
   if (m === 'PUT' && a === 'settings') return send(res, 200, store.updateSettings(await readJson(req)));
@@ -176,4 +194,5 @@ export function serve() {
   });
   server.listen(config.port, config.host, () => console.log(`maa-daily: http://${config.host}:${config.port}/`));
   startScheduler();
+  GAMES.endfield.rediscover();
 }
