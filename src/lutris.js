@@ -60,6 +60,8 @@ export function lutrisGame(slug) {
   const text = fs.readFileSync(path.join(GAMES, `${configPath}.yml`), 'utf8');
   const prefix = yamlValue(text, 'game', 'prefix');
   if (!prefix) throw new Error(`Lutris 游戏 ${slug} 没有 Wine 前缀`);
+  // the program Lutris starts the game with (for a game with its own launcher, the launcher)
+  const exe = yamlValue(text, 'game', 'exe');
   const globalWine = fs.existsSync(path.join(HOME, '.config/lutris/runners/wine.yml'))
     ? fs.readFileSync(path.join(HOME, '.config/lutris/runners/wine.yml'), 'utf8') : '';
   const version = yamlValue(text, 'wine', 'version') || yamlValue(globalWine, 'wine', 'version');
@@ -69,18 +71,19 @@ export function lutrisGame(slug) {
   return {
     slug,
     prefix,
+    exe,
     wine,
     wineserver: path.join(path.dirname(wine), 'wineserver'),
     env: { ...(locale ? { LC_ALL: locale } : {}), ...yamlEnv(globalWine, 'system'), ...yamlEnv(text, 'system') },
   };
 }
 
-// Whether a Windows program of this prefix runs anywhere (the owner may be playing).
-export function prefixBusy(prefix, exe) {
+// Whether one of these Windows programs of this prefix runs anywhere (the owner may be playing).
+export function prefixBusy(prefix, ...exes) {
   for (const pid of fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n))) {
     try {
       const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-      if (!cmd.includes(exe)) continue;
+      if (!exes.some((exe) => cmd.includes(exe))) continue;
       const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
       if (env.includes(`WINEPREFIX=${prefix}\0`) || env.includes(`WINEPREFIX=${prefix}/\0`)) return Number(pid);
     } catch {}

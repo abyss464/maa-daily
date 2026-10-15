@@ -43,6 +43,8 @@ export const screens = {
   get: (id) => call('GET', `/api/screens/${encodeURIComponent(id)}`, undefined, 15_000),
   launch: (id, command, waitSeconds = 90) =>
     call('POST', `/api/screens/${encodeURIComponent(id)}/launch`, { command, wait_seconds: waitSeconds }, (waitSeconds + 30) * 1000),
+  // A hyprctl command against the screen's own Hyprland: window rules, moving windows away.
+  hyprctl: (id, command) => call('POST', `/api/screens/${encodeURIComponent(id)}/hyprctl`, { command }, 15_000),
   async screenshot(id) {
     const r = await call('POST', `/api/screens/${encodeURIComponent(id)}/screenshot`, {}, 30_000);
     return Buffer.from(r.png_base64, 'base64');

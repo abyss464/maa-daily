@@ -15,8 +15,14 @@ const MAAEND = process.env.MAAEND_DIR || path.join(os.homedir(), 'Code/vendor/Ma
 // The CLI takes the project from its libraries' folder: the runtime is a folder of links that
 // holds both (endfield/link-runtime.sh builds it).
 const RUNTIME = path.join(config.dataDir, 'maaend-runtime');
-const GAME_SUBDIR = 'drive_c/Program Files/Hypergryph Launcher/games/Arknights Endfield';
 const EXE = 'Endfield.exe';
+// The client starts only from the official launcher, whose window carries this title; the game's
+// window and its SDK's (login, agreements) carry these.
+const LAUNCHER_TITLE = '鹰角启动器';
+const GAME_TITLE = 'Endfield';
+const SDK_TITLE = 'UIPlatform';
+// An update of the client downloads and installs several GB: the launcher gets this long.
+const LAUNCHER_LIMIT_MIN = 90;
 // Processes carrying this mark are the run's own (the game, MaaEnd and its agents): the idle
 // judgement leaves their load out.
 export const OWN_MARK = 'MAA_DAILY_OWN=1';
@@ -199,6 +205,57 @@ const INTERRUPTS = {
 
 const sh = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
+const gameEnv = (game) => ({ ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all', DXVK_LOG_LEVEL: 'none', MAA_DAILY_OWN: '1' });
+
+// A shell command starting a Windows program of the game's prefix from its own folder.
+function wineCommand(game, exe) {
+  const envArgs = Object.entries(gameEnv(game)).map(([k, v]) => `${k}=${sh(v)}`).join(' ');
+  return `sh -c ${sh(`cd ${sh(path.dirname(exe))} && exec env ${envArgs} ${sh(game.wine)} ${sh(path.basename(exe))}`)}`;
+}
+
+function killPrefix(game) {
+  try {
+    execFileSync(game.wineserver, ['-k'], { env: { ...process.env, WINEPREFIX: game.prefix }, timeout: 30_000 });
+  } catch {}
+}
+
+// Whether a window of this title is on the screen within the time given (present = false: whether
+// none is).
+async function waitWindow(screenId, title, seconds, present = true) {
+  const until = Date.now() + seconds * 1000;
+  for (;;) {
+    const found = await screens.get(screenId).then((x) => x.windows.some((w) => w.title === title), () => false);
+    if (found === present || Date.now() >= until) return found === present;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+// The run report's new lines since the last call, each handed to onEvent.
+function readLines(file, track, onEvent) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const { size } = fs.fstatSync(fd);
+    if (size > track.pos) {
+      const buf = Buffer.alloc(size - track.pos);
+      fs.readSync(fd, buf, 0, buf.length, track.pos);
+      track.pos = size;
+      track.rest += buf.toString('utf8');
+    }
+    fs.closeSync(fd);
+  } catch {}
+  const lines = track.rest.split('\n');
+  track.rest = lines.pop();
+  for (const line of lines) {
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    onEvent(ev);
+  }
+}
+
 export const endfield = {
   id: 'endfield',
   label: '明日方舟：终末地',
@@ -210,52 +267,136 @@ export const endfield = {
     if (!cat.available) throw new Error(cat.error);
     if (!fs.existsSync(path.join(RUNTIME, 'maafw', 'MaaPiCli'))) throw new Error('MaaEnd 运行目录没有建好：运行 endfield/link-runtime.sh');
     const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
-    const gameDir = path.join(game.prefix, GAME_SUBDIR);
-    if (!fs.existsSync(path.join(gameDir, EXE))) throw new Error(`Lutris 前缀里没有终末地：${gameDir}`);
-    if (prefixBusy(game.prefix, EXE)) throw new Error('终末地已经在运行（可能有人在玩），这一轮不运行');
+    if (!game.exe || !fs.existsSync(game.exe)) throw new Error(`Lutris 里终末地的启动程序不存在：${game.exe || '未设置'}`);
+    if (prefixBusy(game.prefix, EXE, path.basename(game.exe))) throw new Error('终末地或它的启动器已经在运行（可能有人在玩），这一轮不运行');
 
     ctx.stage('申请屏幕');
-    const screen = await screens.open({ label: '终末地日常', ttl: (accounts.length * settings.accountTimeoutMin + 30) * 60 });
+    const screen = await screens.open({ label: '终末地日常', ttl: (accounts.length * settings.accountTimeoutMin + LAUNCHER_LIMIT_MIN + 30) * 60 });
     this.activeScreen = screen.id;
-    const env = { ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all', DXVK_LOG_LEVEL: 'none', MAA_DAILY_OWN: '1' };
-    const envArgs = Object.entries(env).map(([k, v]) => `${k}=${sh(v)}`).join(' ');
     try {
       ctx.stage('启动终末地');
-      const launched = await screens.launch(screen.id, `sh -c ${sh(`cd ${sh(gameDir)} && exec env ${envArgs} ${sh(game.wine)} ${EXE}`)}`, 90);
-      if (!launched.windows.length) throw new Error('终末地 90 秒内没有打开窗口');
+      await this.startGame(ctx, screen, game);
       ctx.log(`终末地已启动（屏幕 ${screen.id}）`);
 
+      let restarted = false;
       for (const acc of accounts) {
         if (ctx.stopping()) break;
         ctx.event({ ev: 'account', account: acc.id, phase: 'start' });
         const started = Date.now();
-        const result = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
+        let attempt = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
+        // A game that quits (it asks for a restart once an update's resources are in, or quits
+        // over an outdated client) or cannot reach the open world (it hangs on a screen nothing
+        // handles) is restarted once from the launcher, which first installs an update when there
+        // is one, and the account runs again.
+        if ((attempt.gone || attempt.track.enterFailed) && !restarted && !ctx.stopping()) {
+          restarted = true;
+          ctx.log(`${attempt.gone ? '游戏退出了' : '进不了大世界'}：从启动器重启终末地（有新版本就先更新），再试一次`, acc.name);
+          killPrefix(game);
+          ctx.stage('重启终末地');
+          await this.startGame(ctx, screen, game);
+          attempt = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
+        }
+        const result = this.outcome(ctx, acc, attempt);
         ctx.event({ ev: 'account', account: acc.id, phase: 'end', ...result, seconds: Math.round((Date.now() - started) / 1000) });
       }
     } finally {
       this.activeScreen = null;
       ctx.stage('关闭终末地');
-      try {
-        execFileSync(game.wineserver, ['-k'], { env: { ...process.env, WINEPREFIX: game.prefix }, timeout: 30_000 });
-      } catch {}
+      killPrefix(game);
       await screens.close(screen.id);
     }
   },
 
-  // The game opened for a person (a first login, a tutorial MaaEnd does not handle), in a pool
-  // screen watched and worked from the pool's browser viewer, until closeForUser.
+  // The game starts as a player starts it, with the program Lutris starts it with: the official
+  // launcher (the client refuses to start on its own). The launcher's task in our MaaEnd branch
+  // updates the client when the launcher offers an update and then starts it; the launcher is then
+  // put out of sight. The SDK's window (login, agreements) floats over the game instead of taking
+  // half of the screen.
+  async startGame(ctx, screen, game) {
+    // a launcher just killed may still be closing
+    await waitWindow(screen.id, LAUNCHER_TITLE, 30, false);
+    await screens.hyprctl(screen.id, `keyword windowrule float on, match:title ^(${SDK_TITLE})$`);
+    await screens.launch(screen.id, wineCommand(game, game.exe), 90);
+    if (!(await waitWindow(screen.id, LAUNCHER_TITLE, 90))) throw new Error('启动器 90 秒内没有打开');
+    const report = path.join(config.dataDir, 'flow', 'launcher.report.jsonl');
+    for (let attempt = 1; attempt <= 3 && !ctx.stopping(); attempt++) {
+      const { timedOut } = await this.runPi(ctx, screen, { task: 'AutoPlayLauncher', limitMin: LAUNCHER_LIMIT_MIN, report, onEvent: (ev) => {
+        if (ev.ev === 'launcher' && ev.state === 'update') {
+          ctx.stage('更新终末地');
+          ctx.log('启动器里有新版本，正在更新终末地');
+        }
+      } });
+      if (timedOut) throw new Error(`启动器 ${LAUNCHER_LIMIT_MIN} 分钟内没有把终末地启动起来（更新没有完成？）`);
+      if (await waitWindow(screen.id, GAME_TITLE, 60)) {
+        await screens.hyprctl(screen.id, `dispatch movetoworkspacesilent special:launcher,title:^(${LAUNCHER_TITLE})$`);
+        await screens.hyprctl(screen.id, `dispatch focuswindow title:^(${GAME_TITLE})$`);
+        return;
+      }
+    }
+    if (!ctx.stopping()) throw new Error('启动器没能把终末地启动起来');
+  },
+
+  // One MaaEnd task through its CLI on this screen, ended after limitMin minutes, or as soon as
+  // alive() (asked every 10 seconds) answers false twice running; the run report it writes is
+  // handed to onEvent line by line as it grows.
+  async runPi(ctx, screen, { task, env = {}, limitMin, report: reportFile, onEvent, alive }) {
+    const maafw = path.join(RUNTIME, 'maafw');
+    fs.mkdirSync(path.join(maafw, 'config'), { recursive: true });
+    fs.mkdirSync(path.dirname(reportFile), { recursive: true });
+    fs.writeFileSync(reportFile, '');
+    const conf = { controller: { name: 'Linux-Wlroots' }, lnx: { wlr_socket_path: screen.wayland_socket }, resource: '官服', task: [{ name: task }] };
+    fs.writeFileSync(path.join(maafw, 'config', 'maa_pi_config.json'), JSON.stringify(conf, null, 1));
+    const child = spawn(path.join(maafw, 'MaaPiCli'), ['-d'], {
+      cwd: maafw, detached: true, stdio: ['ignore', 'ignore', 'ignore'],
+      env: { ...process.env, LD_LIBRARY_PATH: maafw, MAA_DAILY_OWN: '1', MAA_DAILY_FLOW_REPORT: reportFile,
+        // the agents turn the camera through this compositor's virtual pointer (MaaFramework's Wlr input has no relative move)
+        MAAEND_WLR_SOCKET: screen.wayland_socket, ...env },
+    });
+    const kill = () => {
+      try {
+        process.kill(-child.pid, 'SIGTERM');
+      } catch {}
+    };
+    ctx.setChild({ kill });
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      kill();
+    }, limitMin * 60_000);
+    let gone = false;
+    let missed = 0;
+    const check = alive && setInterval(async () => {
+      missed = (await alive()) ? 0 : missed + 1;
+      if (missed >= 2 && !gone) {
+        gone = true;
+        kill();
+      }
+    }, 10_000);
+    const track = { pos: 0, rest: '' };
+    const read = () => readLines(reportFile, track, onEvent);
+    const watch = setInterval(read, 2000);
+    await new Promise((resolve) => child.on('close', resolve));
+    clearInterval(watch);
+    clearInterval(check);
+    clearTimeout(timer);
+    ctx.setChild(null);
+    read();
+    return { timedOut, gone };
+  },
+
+  // The game opened for a person (a first login, a new agreement, a tutorial MaaEnd does not
+  // handle), in a pool screen watched and worked from the pool's browser viewer, until
+  // closeForUser. It starts as for a run, so an update is installed first.
   manualScreen: null,
 
-  async openForUser(settings) {
+  async openForUser(settings, stage = () => {}) {
     if (this.manualScreen) return screens.get(this.manualScreen);
     const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
-    const gameDir = path.join(game.prefix, GAME_SUBDIR);
-    if (prefixBusy(game.prefix, EXE)) throw new Error('终末地已经在运行');
+    if (!game.exe || !fs.existsSync(game.exe)) throw new Error(`Lutris 里终末地的启动程序不存在：${game.exe || '未设置'}`);
+    if (prefixBusy(game.prefix, EXE, path.basename(game.exe))) throw new Error('终末地或它的启动器已经在运行');
     const screen = await screens.open({ label: MANUAL_LABEL, ttl: 3 * 3600, held: false });
-    const env = { ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all', DXVK_LOG_LEVEL: 'none', MAA_DAILY_OWN: '1' };
-    const envArgs = Object.entries(env).map(([k, v]) => `${k}=${sh(v)}`).join(' ');
-    await screens.launch(screen.id, `sh -c ${sh(`cd ${sh(gameDir)} && exec env ${envArgs} ${sh(game.wine)} ${EXE}`)}`, 90);
     this.manualScreen = screen.id;
+    await this.startGame({ log: () => {}, stage, stopping: () => false, setChild: () => {} }, screen, game);
     return screens.get(screen.id);
   },
 
@@ -268,10 +409,7 @@ export const endfield = {
   },
 
   async closeForUser(settings) {
-    const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
-    try {
-      execFileSync(game.wineserver, ['-k'], { env: { ...process.env, WINEPREFIX: game.prefix }, timeout: 30_000 });
-    } catch {}
+    killPrefix(lutrisGame(settings.endfieldLutrisGame || 'arknight'));
     if (this.manualScreen) await screens.close(this.manualScreen);
     this.manualScreen = null;
   },
@@ -279,9 +417,7 @@ export const endfield = {
   // One account: MaaEnd's flow controller runs the account's plan (see AutoPlay in our MaaEnd
   // branch), and reports each step to a file read here.
   async runAccount(ctx, acc, screen, cat, switchAccount) {
-    const maafw = path.join(RUNTIME, 'maafw');
     const dir = path.join(config.dataDir, 'flow');
-    fs.mkdirSync(path.join(maafw, 'config'), { recursive: true });
     fs.mkdirSync(dir, { recursive: true });
     const planFile = path.join(dir, `${acc.id}.plan.json`);
     const reportFile = path.join(dir, `${acc.id}.report.jsonl`);
@@ -289,37 +425,23 @@ export const endfield = {
     const budgetS = Math.max(300, ctx.settings.accountTimeoutMin * 60 - 180);
     const plan = flowPlan(acc, cat, switchAccount, budgetS, reportFile, ctx.settings.endfieldPlayMinutes ?? 0);
     fs.writeFileSync(planFile, JSON.stringify(plan, null, 1));
-    fs.writeFileSync(reportFile, '');
-    const conf = { controller: { name: 'Linux-Wlroots' }, lnx: { wlr_socket_path: screen.wayland_socket }, resource: '官服', task: [{ name: 'AutoPlay' }] };
-    fs.writeFileSync(path.join(maafw, 'config', 'maa_pi_config.json'), JSON.stringify(conf, null, 1));
     ctx.log(`计划：${plan.steps.map((st) => st.label).join(' → ') || '（没有启用的任务）'}`, acc.name);
 
-    const child = spawn(path.join(maafw, 'MaaPiCli'), ['-d'], {
-      cwd: maafw, detached: true, stdio: ['ignore', 'ignore', 'ignore'],
-      env: { ...process.env, LD_LIBRARY_PATH: maafw, MAA_DAILY_OWN: '1', MAA_DAILY_FLOW_PLAN: planFile, MAA_DAILY_FLOW_REPORT: reportFile,
-        // the agents turn the camera through this compositor's virtual pointer (MaaFramework's Wlr input has no relative move)
-        MAAEND_WLR_SOCKET: screen.wayland_socket },
+    const track = { chains: {}, ended: null, enterFailed: false };
+    const { timedOut, gone } = await this.runPi(ctx, screen, {
+      task: 'AutoPlay', env: { MAA_DAILY_FLOW_PLAN: planFile }, limitMin: ctx.settings.accountTimeoutMin, report: reportFile,
+      onEvent: (ev) => this.onReport(ctx, acc, ev, track),
+      // the game quits by itself after an update's resources are in, asking to be restarted
+      alive: () => waitWindow(screen.id, GAME_TITLE, 0),
     });
-    const kill = () => {
-      try {
-        process.kill(-child.pid, 'SIGTERM');
-      } catch {}
-    };
-    ctx.setChild({ kill });
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      ctx.log(`运行超过 ${ctx.settings.accountTimeoutMin} 分钟，强制停止`, acc.name);
-      kill();
-    }, ctx.settings.accountTimeoutMin * 60_000);
-    const track = { pos: 0, rest: '', chains: {}, ended: null };
-    const read = () => this.readReport(ctx, acc, reportFile, track);
-    const watch = setInterval(read, 2000);
-    await new Promise((resolve) => child.on('close', resolve));
-    clearInterval(watch);
-    clearTimeout(timer);
-    ctx.setChild(null);
-    read();
+    if (timedOut) ctx.log(`运行超过 ${ctx.settings.accountTimeoutMin} 分钟，强制停止`, acc.name);
+    if (gone) ctx.log('终末地的窗口没了（游戏退出了），停下这一轮流程', acc.name);
+    if (!track.ended && !gone) ctx.log('流程控制器没有正常结束', acc.name);
+    return { plan, track, timedOut, gone };
+  },
+
+  // An account's outcome from its last attempt: the steps it never finished count as errors.
+  outcome(ctx, acc, { plan, track, timedOut }) {
     const wanted = plan.steps.map((st) => st.id);
     for (const n of wanted) {
       if (!track.chains[n] || track.chains[n] === 'start') {
@@ -327,59 +449,40 @@ export const endfield = {
         ctx.event({ ev: 'chain', account: acc.id, chain: n, state: 'error', label: plan.steps.find((st) => st.id === n)?.label });
       }
     }
-    if (!track.ended) ctx.log('流程控制器没有正常结束', acc.name);
     const done = wanted.filter((n) => track.chains[n] === 'done');
     const ok = Boolean(track.ended) && done.length === wanted.length;
     return { ok, chains: track.chains, timed_out: timedOut, partial: !ok && done.length > 0 && track.chains.AccountSwitch !== 'error' };
   },
 
-  // The controller's report, one JSON line per transition, read from where the last call stopped.
-  readReport(ctx, acc, file, track) {
-    try {
-      const fd = fs.openSync(file, 'r');
-      const { size } = fs.fstatSync(fd);
-      if (size > track.pos) {
-        const buf = Buffer.alloc(size - track.pos);
-        fs.readSync(fd, buf, 0, buf.length, track.pos);
-        track.pos = size;
-        track.rest += buf.toString('utf8');
-      }
-      fs.closeSync(fd);
-    } catch {}
-    const lines = track.rest.split('\n');
-    track.rest = lines.pop();
-    for (const line of lines) {
-      let ev;
-      try {
-        ev = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (ev.ev === 'step') {
-        if (ev.id === 'EnterWorld') {
-          if (ev.state === 'skipped') ctx.log(`无法进入大世界：${ev.reason || ''}`, acc.name);
-          continue;
+  // One transition of the controller's report.
+  onReport(ctx, acc, ev, track) {
+    if (ev.ev === 'step') {
+      if (ev.id === 'EnterWorld') {
+        if (ev.state === 'skipped') {
+          track.enterFailed = true;
+          ctx.log(`无法进入大世界：${ev.reason || ''}`, acc.name);
         }
-        if (ev.state === 'retry') {
-          ctx.log(`${ev.label} 第 ${ev.attempt} 次没成功（${ev.reason}），清理画面、回到大世界后重试`, acc.name);
-          continue;
-        }
-        const state = ev.state === 'skipped' ? 'error' : ev.state;
-        track.chains[ev.id] = state;
-        ctx.event({ ev: 'chain', account: acc.id, chain: ev.id, state, label: ev.label });
-        if (ev.state === 'skipped') ctx.log(`${ev.label} 跳过：${ev.reason || ''}`, acc.name);
-      } else if (ev.ev === 'interrupt') {
-        ctx.log(`处理了${INTERRUPTS[ev.node] || ev.node}`, acc.name);
-      } else if (ev.ev === 'recover' && !ev.ok) {
-        ctx.log('回到大世界失败', acc.name);
-      } else if (ev.ev === 'badges') {
-        ctx.log(`跟着红点点了 ${ev.clicks} 处`, acc.name);
-      } else if (ev.ev === 'play') {
-        ctx.log(`推进任务 ${Math.round(ev.seconds / 60)} 分钟：任务目标推进 ${ev.advances} 次`, acc.name);
-      } else if (ev.ev === 'session' && ev.phase === 'end') {
-        track.ended = ev;
-        ctx.log(`流程结束：完成 ${ev.done} 项，跳过 ${ev.skipped} 项${ev.reason ? `（${ev.reason}）` : ''}`, acc.name);
+        return;
       }
+      if (ev.state === 'retry') {
+        ctx.log(`${ev.label} 第 ${ev.attempt} 次没成功（${ev.reason}），清理画面、回到大世界后重试`, acc.name);
+        return;
+      }
+      const state = ev.state === 'skipped' ? 'error' : ev.state;
+      track.chains[ev.id] = state;
+      ctx.event({ ev: 'chain', account: acc.id, chain: ev.id, state, label: ev.label });
+      if (ev.state === 'skipped') ctx.log(`${ev.label} 跳过：${ev.reason || ''}`, acc.name);
+    } else if (ev.ev === 'interrupt') {
+      ctx.log(`处理了${INTERRUPTS[ev.node] || ev.node}`, acc.name);
+    } else if (ev.ev === 'recover' && !ev.ok) {
+      ctx.log('回到大世界失败', acc.name);
+    } else if (ev.ev === 'badges') {
+      ctx.log(`跟着红点点了 ${ev.clicks} 处`, acc.name);
+    } else if (ev.ev === 'play') {
+      ctx.log(`推进任务 ${Math.round(ev.seconds / 60)} 分钟：任务目标推进 ${ev.advances} 次`, acc.name);
+    } else if (ev.ev === 'session' && ev.phase === 'end') {
+      track.ended = ev;
+      ctx.log(`流程结束：完成 ${ev.done} 项，跳过 ${ev.skipped} 项${ev.reason ? `（${ev.reason}）` : ''}`, acc.name);
     }
   },
 };

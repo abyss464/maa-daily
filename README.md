@@ -21,9 +21,18 @@ Authelia, admins only; the remote viewer opens only from the local page).
   state machine on a virtual pad (it skips story and follows the tracked quest; see `MAA-DAILY.md`);
   it needs write access to `/dev/uinput`, and 0 minutes turns it off.
   `endfield/link-runtime.sh` lays the built MaaEnd out the way its CLI wants it.
-  A run skips Endfield when the game already runs in that prefix (the owner playing). For a login or a
-  tutorial MaaEnd does not handle, "打开终末地（用于操作）" opens the game in a pool screen worked
-  from the pool's browser viewer.
+  The game starts as a player starts it, with the program Lutris starts it with, the official
+  launcher (the client refuses to start on its own): MaaEnd's `AutoPlayLauncher` task does what the
+  launcher's button says, installing an update first when there is one, and starts the game; the
+  launcher is then moved to a hidden workspace of the screen, and the SDK's window (login,
+  agreements) floats over the game. When the game quits during a run (it asks for a restart once an
+  update's resources are in) or cannot reach the open world, it is restarted once from the launcher
+  and the account runs again. The client's anti-cheat (ACE) needs a Wine build that carries its
+  fixes: dwproton 11.0-13 or later for the 1.6 client.
+  A run skips Endfield when the game or its launcher already runs in that prefix (the owner
+  playing). For a login, a new agreement or a tutorial MaaEnd does not handle, "打开终末地（用于操作）"
+  starts the game the same way in a pool screen worked from the pool's browser viewer; a run never
+  enters credentials or agrees to anything itself.
 - **When it runs.** While the computer is idle by load, not by input: every 10 s the service samples
   the CPU share of everything except the run itself (the guest container's cgroup, and the
   processes marked `MAA_DAILY_OWN=1`: Endfield and MaaEnd; their GPU time comes from DRM fdinfo), the busiest GPU (`gpu_busy_percent`), and the

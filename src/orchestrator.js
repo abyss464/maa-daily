@@ -250,7 +250,7 @@ class Orchestrator {
     (async () => {
       try {
         this.stage('启动终末地');
-        const screen = await GAMES.endfield.openForUser(store.settings());
+        const screen = await GAMES.endfield.openForUser(store.settings(), (s) => this.stage(`打开终末地：${s}`));
         this.lastNotice = { ok: true, msg: `终末地已打开，在屏幕 ${screen.id} 的查看器里操作`, at: new Date().toISOString() };
       } catch (e) {
         this.lastNotice = { ok: false, msg: `打开终末地失败：${e.message}`, at: new Date().toISOString() };
