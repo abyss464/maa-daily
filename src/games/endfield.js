@@ -288,7 +288,11 @@ export const endfield = {
         // over an outdated client) or cannot reach the open world (it hangs on a screen nothing
         // handles) is restarted once from the launcher, which first installs an update when there
         // is one, and the account runs again.
-        if ((attempt.gone || attempt.track.enterFailed) && !restarted && !ctx.stopping()) {
+        // The SDK's window still up means the game waits for a person (a login, a new agreement):
+        // a run never answers it, and a restart would not either.
+        const waitsForPerson = attempt.track.enterFailed && (await waitWindow(screen.id, SDK_TITLE, 0));
+        if (waitsForPerson) ctx.log('终末地在等人登录或同意新协议：在面板上「打开终末地」处理后，下一轮会接着跑', acc.name);
+        if ((attempt.gone || attempt.track.enterFailed) && !waitsForPerson && !restarted && !ctx.stopping()) {
           restarted = true;
           ctx.log(`${attempt.gone ? '游戏退出了' : '进不了大世界'}：从启动器重启终末地（有新版本就先更新），再试一次`, acc.name);
           killPrefix(game);
