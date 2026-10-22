@@ -253,7 +253,7 @@ details.pb p { margin: 8px 0 0; }
       <div class="pb form" style="padding-top:16px">
         <div class="row">
           <label class="field"><span>同一账号两次运行至少间隔（小时）</span><input type="number" id="st-interval" min="1" max="48"><small>每天 04:00（北京时间）刷新后还会再运行一次</small></label>
-          <label class="field"><span>失败后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"></label>
+          <label class="field"><span>失败或手动停止后多久再试（分钟）</span><input type="number" id="st-retry" min="5" max="1440"><small>手动停止只推迟本次账号的自动重试，其他账号照常运行</small></label>
           <label class="field"><span>单个账号最长运行（分钟）</span><input type="number" id="st-timeout" min="5" max="600"></label>
         </div>
         <label class="check"><input type="checkbox" id="st-close"> 最后一个账号完成后关闭游戏</label>
@@ -342,7 +342,7 @@ async function refresh() {
   $('#s-next').textContent = !S.settings.enabled ? '自动运行已关闭'
     : S.nextDue === 'now' ? `${dueN} 个账号待运行，${id.idle ? '即将开始' : `空闲 ${S.settings.idleMinutes} 分钟后开始`}` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
   const enabled = S.accounts.filter((a) => a.enabled);
-  const doneToday = enabled.filter((a) => !S.due[a.id]?.due && S.due[a.id]?.lastOk).length;
+  const doneToday = enabled.filter((a) => S.due[a.id]?.completed).length;
   $('#s-acc').textContent = `${enabled.length} 个启用 · ${doneToday} 个已完成`;
   const busy = Boolean(S.busy);
   $('#b-run').disabled = busy || !enabled.length;
@@ -368,7 +368,7 @@ function renderGames() {
   const busy = Boolean(S.busy);
   const card = (game, rows, actions) => {
     const accs = S.accounts.filter((a) => gameOf(a) === game && a.enabled);
-    const done = accs.filter((a) => !S.due[a.id]?.due && S.due[a.id]?.lastOk).length;
+    const done = accs.filter((a) => S.due[a.id]?.completed).length;
     return `<div class="panel"><div class="ph"><h2>${GAME_LABEL[game]}</h2><span class="sub">${accs.length ? `${done}/${accs.length} 个账号今天已完成` : '没有启用的账号'}</span>
       <div class="right">${actions}</div></div><dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div>`;
   };
@@ -569,7 +569,7 @@ function renderAccounts(force = true) {
       const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => label(k));
       const d = S.due?.[a.id] || {};
       const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
-        : d.retryAt ? ` · 上次失败，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
+        : d.retryAt ? ` · ${d.lastStatus === 'stopped' ? '已手动停止' : '上次失败'}，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
       const i = list.indexOf(a);
       return `<div class="acc ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
         <div class="acc-head">
@@ -651,7 +651,7 @@ $('#tab-accounts').addEventListener('click', act(async (e) => {
 }));
 // ---- controls ----
 $('#b-run').onclick = act(async () => { await api('POST', '/api/run', {}); toast('开始运行'); refresh(); });
-$('#b-stop').onclick = act(async () => { await api('POST', '/api/stop'); refresh(); });
+$('#b-stop').onclick = act(async () => { await api('POST', '/api/stop'); toast(`已请求停止，本次账号 ${S.settings.retryMinutes} 分钟后可自动重试`); await refresh(); });
 // ---- settings ----
 function fillSettings() {
   if (!S) return;

@@ -42,6 +42,10 @@ Authelia, admins only; the remote viewer opens only from the local page).
   not inside the retry delay after a failure. Load above the limits for two minutes (or less than
   2 GB of memory left) stops an idle run; the accounts it did not finish are marked yielded and stay
   due. A run started from the page is not stopped by load.
+  Manually stopping a run leaves automatic scheduling enabled, but defers the accounts in that
+  run by the configured retry delay (the same setting used after a failure). The stop request is
+  saved immediately, so the delay survives a service restart; yielding to load still resumes at
+  the next idle opportunity. Startup waits and retries also honour stop requests.
 - **A run.** The service boots the instance if it is off, starts MuMu in the desktop session, copies `guest/runner.py` and the job in, and streams the
   runner over SSH. The runner drives MaaCore through MAA's Python binding: for each enabled account in
   list order, `StartUp` (switching to the account by its login name) and the account's tasks (Fight,

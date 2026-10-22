@@ -81,11 +81,24 @@ class Orchestrator {
       accounts: Object.fromEntries(accounts.map((a) => [a.id, emptyResult(a)])),
     };
     cur.runId = run.id;
+    cur.run = run;
     cur.trigger = trigger;
     runs.save(run);
     this.log(run.id, `开始运行（${TRIGGER[trigger] || trigger}），账号：${accounts.map((a) => a.name).join('、')}`);
-    this.execute(run, accounts).finally(() => {
-      this.current = null;
+    this.execute(run, accounts).catch((e) => {
+      if (cur.stopping) this.markStopped(run);
+      else {
+        run.status = 'failed';
+        run.error = e.message;
+        for (const a of Object.values(run.accounts)) {
+          if (['pending', 'running'].includes(a.status)) a.status = 'failed';
+        }
+      }
+      run.endedAt = new Date().toISOString();
+      runs.save(run);
+      this.log(run.id, `结束：${STATUS[run.status]}（${run.error}）`);
+    }).finally(() => {
+      if (this.current === cur) this.current = null;
     });
     return run;
   }
@@ -102,6 +115,7 @@ class Orchestrator {
         stopping: () => Boolean(this.current?.stopping),
         setChild: (child) => {
           if (this.current) this.current.child = child;
+          if (this.current?.stopping) child?.kill();
         },
         event: (ev) => this.onEvent(run, ev),
       };
@@ -155,7 +169,8 @@ class Orchestrator {
           // Some tasks done after a successful start is partial: the day's work is mostly in.
           const doneAny = Object.entries(acc.chains).some(([c, st]) => !['StartUp', 'CloseDown', 'AccountSwitch'].includes(c) && st === 'done');
           const partial = ev.partial ?? (acc.chains.StartUp === 'done' && doneAny);
-          acc.status = ev.ok ? 'ok' : partial ? 'partial' : 'failed';
+          acc.status = this.current?.stopping ? (this.current.stopReason === 'yield' ? 'yielded' : 'stopped')
+            : ev.ok ? 'ok' : partial ? 'partial' : 'failed';
           acc.seconds = ev.seconds || 0;
           if (ev.timed_out) acc.timedOut = true;
           const bad = Object.entries(acc.chains).filter(([, s]) => s !== 'done').map(([c, s]) => `${chainName(c)}${CHAIN_STATE[s] || s}`);
@@ -204,8 +219,9 @@ class Orchestrator {
     const yielded = this.current.stopReason === 'yield';
     run.status = yielded ? 'yielded' : 'stopped';
     run.error = yielded ? '电脑有人使用，已让出' : '已手动停止';
+    run.stopReason = yielded ? 'yield' : 'manual';
     for (const a of Object.values(run.accounts)) {
-      if (a.status === 'running') a.status = 'yielded';
+      if (a.status === 'running' || a.status === 'yielded') a.status = yielded ? 'yielded' : 'stopped';
       else if (a.status === 'pending') a.status = 'skipped';
     }
   }
@@ -213,8 +229,15 @@ class Orchestrator {
   stop(reason = 'manual') {
     if (!this.current) throw Object.assign(new Error('当前没有运行'), { status: 409 });
     if (this.current.kind !== 'run') throw Object.assign(new Error(`正在${this.current.label}，不能停止`), { status: 409 });
+    if (this.current.stopping && (reason === 'yield' || this.current.stopReason === 'manual')) return this.busy();
     this.current.stopping = true;
     this.current.stopReason = reason;
+    if (this.current.runId) {
+      const run = this.current.run;
+      run.stopReason = reason;
+      run.stopRequestedAt = new Date().toISOString();
+      runs.save(run);
+    }
     if (this.current.runId) this.log(this.current.runId, reason === 'yield' ? '电脑忙了起来，停止运行' : '收到停止请求');
     this.current.stage = '正在停止';
     this.current.child?.kill();

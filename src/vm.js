@@ -5,7 +5,17 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { config } from './config.js';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const checkStopped = (stopping) => {
+  if (stopping()) throw new Error('运行已停止');
+};
+const sleep = async (ms, stopping = () => false) => {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    checkStopped(stopping);
+    await new Promise((r) => setTimeout(r, Math.min(500, end - Date.now())));
+  }
+  checkStopped(stopping);
+};
 
 function call(method, path, body, timeoutMs = 0) {
   const url = new URL(path, config.poolUrl);
@@ -55,8 +65,10 @@ export const vm = {
 
   // Boots the instance if needed and waits until Windows answers. Returns whether it was
   // already running.
-  async ensureRunning(ref, onWait = () => {}) {
+  async ensureRunning(ref, onWait = () => {}, stopping = () => false) {
+    checkStopped(stopping);
     let inst = await vm.inspect(ref);
+    checkStopped(stopping);
     if (inst.status === 'ready') return true;
     if (inst.status === 'stopped') {
       onWait('启动 Windows 虚拟机');
@@ -64,8 +76,9 @@ export const vm = {
     }
     const end = Date.now() + 10 * 60_000;
     while (Date.now() < end) {
-      await sleep(5000);
+      await sleep(5000, stopping);
       inst = await vm.inspect(ref);
+      checkStopped(stopping);
       if (inst.status === 'ready') return false;
     }
     throw new Error(`Windows 虚拟机 10 分钟内没有就绪（状态：${inst.status}）`);
@@ -90,14 +103,15 @@ export const vm = {
 
   // MuMu is a desktop program: start and stop it in the logged-on session. Right after boot
   // SSH answers before the automatic logon has finished, so a first failure is retried.
-  async mumu(ref, action) {
+  async mumu(ref, action, stopping = () => false) {
     const m = `${config.guest.mumuDir}\\MuMuManager.exe`;
     for (let i = 0; ; i++) {
+      checkStopped(stopping);
       try {
         return await vm.exec(ref, `& ${ps(m)} control -v 0 ${action}`, { desktop: true, timeout: 120 });
       } catch (e) {
         if (i >= 5) throw e;
-        await sleep(15_000);
+        await sleep(15_000, stopping);
       }
     }
   },
@@ -131,10 +145,13 @@ export const vm = {
     };
     child.stdout.on('data', feed);
     child.stderr.on('data', feed);
-    const done = new Promise((resolve) => child.on('close', (code) => {
-      if (buf.trim()) onLine(buf.trim());
-      resolve(code);
-    }));
+    const done = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.on('close', (code) => {
+        if (buf.trim()) onLine(buf.trim());
+        resolve(code);
+      });
+    });
     return { done, kill: () => child.kill('SIGTERM') };
   },
 };

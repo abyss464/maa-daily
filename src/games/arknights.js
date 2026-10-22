@@ -43,12 +43,18 @@ export const arknights = {
     const settings = ctx.settings;
     const ref = settings.instance;
     let wasRunning = true;
+    const checkStopped = () => {
+      if (ctx.stopping()) throw new Error('运行已停止');
+    };
     try {
-      wasRunning = await vm.ensureRunning(ref, (s) => ctx.stage(s));
+      checkStopped();
+      wasRunning = (await vm.inspect(ref)).status !== 'stopped';
+      await vm.ensureRunning(ref, (s) => ctx.stage(s), ctx.stopping);
       const inst = await vm.inspect(ref);
-      if (ctx.stopping()) throw new Error('已手动停止');
+      checkStopped();
       ctx.stage('启动模拟器');
-      await vm.mumu(ref, 'launch');
+      await vm.mumu(ref, 'launch', ctx.stopping);
+      checkStopped();
 
       const g = config.guest;
       const job = {
@@ -59,10 +65,12 @@ export const arknights = {
       const jobFile = path.join(JOBS, `${run.id}.json`);
       fs.writeFileSync(jobFile, JSON.stringify(job), { mode: 0o600 });
       await vm.exec(ref, `New-Item -ItemType Directory -Force ${ps(g.runnerDir)} | Out-Null`);
+      checkStopped();
       await vm.cpIn(ref, RUNNER, `${g.runnerDir}\\runner.py`);
+      checkStopped();
       await vm.cpIn(ref, jobFile, `${g.runnerDir}\\job.json`);
       fs.rmSync(jobFile, { force: true });
-      if (ctx.stopping()) throw new Error('已手动停止');
+      checkStopped();
 
       ctx.stage('MAA 运行中');
       let fatal = null;
@@ -93,7 +101,7 @@ export const arknights = {
       if (settings.shutdownAfter && !wasRunning) {
         try {
           ctx.stage('关闭模拟器和 Windows');
-          await vm.mumu(ref, 'shutdown').catch(() => {});
+          if ((await vm.status(ref))?.status === 'ready') await vm.mumu(ref, 'shutdown').catch(() => {});
           await vm.stop(ref);
           ctx.log('Windows 已关机');
         } catch (e) {

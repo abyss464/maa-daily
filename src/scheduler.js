@@ -31,15 +31,16 @@ export function accountStatus(now = Date.now()) {
   const seen = {};
   for (const r of runs.list()) {
     for (const [id, a] of Object.entries(r.accounts || {})) {
-      const at = Date.parse(r.endedAt || r.startedAt);
+      const at = Date.parse(r.endedAt || r.stopRequestedAt || r.startedAt);
       const st = (seen[id] ||= { lastOk: null, lastAttempt: null, lastStatus: null });
       // A partial result (started, some tasks done) counts as done for scheduling: retrying it
       // would only repeat the tasks that already succeeded.
       const okish = a.status === 'ok' || a.status === 'partial';
       if (okish && (!st.lastOk || at > st.lastOk)) st.lastOk = at;
-      if ((okish || a.status === 'failed') && (!st.lastAttempt || at > st.lastAttempt)) {
+      const stopped = r.status === 'stopped' || r.stopReason === 'manual';
+      if ((okish || a.status === 'failed' || stopped) && (!st.lastAttempt || at > st.lastAttempt)) {
         st.lastAttempt = at;
-        st.lastStatus = okish ? 'ok' : 'failed';
+        st.lastStatus = stopped ? 'stopped' : okish ? 'ok' : 'failed';
       }
     }
   }
@@ -47,11 +48,12 @@ export function accountStatus(now = Date.now()) {
   for (const a of store.accounts()) {
     const st = seen[a.id] || { lastOk: null, lastAttempt: null, lastStatus: null };
     const stale = !st.lastOk || st.lastOk < lastReset(now) || now - st.lastOk >= s.intervalHours * 3600_000;
-    const backoff = st.lastStatus === 'failed' && now - st.lastAttempt < s.retryMinutes * 60_000;
+    const backoff = ['failed', 'stopped'].includes(st.lastStatus) && now - st.lastAttempt < s.retryMinutes * 60_000;
     out[a.id] = {
       lastOk: st.lastOk && new Date(st.lastOk).toISOString(),
       lastAttempt: st.lastAttempt && new Date(st.lastAttempt).toISOString(),
       lastStatus: st.lastStatus,
+      completed: !stale,
       due: a.enabled && stale && !backoff,
       retryAt: backoff ? new Date(st.lastAttempt + s.retryMinutes * 60_000).toISOString() : null,
       nextDue: stale ? null : new Date(Math.min(lastReset(now) + 86400_000, st.lastOk + s.intervalHours * 3600_000)).toISOString(),

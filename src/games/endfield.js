@@ -221,9 +221,10 @@ function killPrefix(game) {
 
 // Whether a window of this title is on the screen within the time given (present = false: whether
 // none is).
-async function waitWindow(screenId, title, seconds, present = true) {
+async function waitWindow(screenId, title, seconds, present = true, stopping = () => false) {
   const until = Date.now() + seconds * 1000;
   for (;;) {
+    if (stopping()) throw new Error('运行已停止');
     const found = await screens.get(screenId).then((x) => x.windows.some((w) => w.title === title), () => false);
     if (found === present || Date.now() >= until) return found === present;
     await new Promise((r) => setTimeout(r, 2000));
@@ -274,6 +275,7 @@ export const endfield = {
     const screen = await screens.open({ label: '终末地日常', ttl: (accounts.length * settings.accountTimeoutMin + LAUNCHER_LIMIT_MIN + 30) * 60 });
     this.activeScreen = screen.id;
     try {
+      if (ctx.stopping()) throw new Error('运行已停止');
       ctx.stage('启动终末地');
       await this.startGame(ctx, screen, game);
       ctx.log(`终末地已启动（屏幕 ${screen.id}）`);
@@ -300,6 +302,7 @@ export const endfield = {
           await this.startGame(ctx, screen, game);
           attempt = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
         }
+        if (ctx.stopping()) break;
         const result = this.outcome(ctx, acc, attempt);
         ctx.event({ ev: 'account', account: acc.id, phase: 'end', ...result, seconds: Math.round((Date.now() - started) / 1000) });
       }
@@ -317,11 +320,18 @@ export const endfield = {
   // put out of sight. The SDK's window (login, agreements) floats over the game instead of taking
   // half of the screen.
   async startGame(ctx, screen, game) {
+    const checkStopped = () => {
+      if (ctx.stopping()) throw new Error('运行已停止');
+    };
+    checkStopped();
     // a launcher just killed may still be closing
-    await waitWindow(screen.id, LAUNCHER_TITLE, 30, false);
+    await waitWindow(screen.id, LAUNCHER_TITLE, 30, false, ctx.stopping);
+    checkStopped();
     await screens.hyprctl(screen.id, `keyword windowrule float on, match:title ^(${SDK_TITLE})$`);
+    checkStopped();
     await screens.launch(screen.id, wineCommand(game, game.exe), 90);
-    if (!(await waitWindow(screen.id, LAUNCHER_TITLE, 90))) throw new Error('启动器 90 秒内没有打开');
+    checkStopped();
+    if (!(await waitWindow(screen.id, LAUNCHER_TITLE, 90, true, ctx.stopping))) throw new Error('启动器 90 秒内没有打开');
     const report = path.join(config.dataDir, 'flow', 'launcher.report.jsonl');
     for (let attempt = 1; attempt <= 3 && !ctx.stopping(); attempt++) {
       const { timedOut } = await this.runPi(ctx, screen, { task: 'AutoPlayLauncher', limitMin: LAUNCHER_LIMIT_MIN, report, onEvent: (ev) => {
@@ -331,7 +341,9 @@ export const endfield = {
         }
       } });
       if (timedOut) throw new Error(`启动器 ${LAUNCHER_LIMIT_MIN} 分钟内没有把终末地启动起来（更新没有完成？）`);
-      if (await waitWindow(screen.id, GAME_TITLE, 60)) {
+      checkStopped();
+      if (await waitWindow(screen.id, GAME_TITLE, 60, true, ctx.stopping)) {
+        checkStopped();
         await screens.hyprctl(screen.id, `dispatch movetoworkspacesilent special:launcher,title:^(${LAUNCHER_TITLE})$`);
         await screens.hyprctl(screen.id, `dispatch focuswindow title:^(${GAME_TITLE})$`);
         return;
@@ -344,6 +356,7 @@ export const endfield = {
   // alive() (asked every 10 seconds) answers false twice running; the run report it writes is
   // handed to onEvent line by line as it grows.
   async runPi(ctx, screen, { task, env = {}, limitMin, report: reportFile, onEvent, alive }) {
+    if (ctx.stopping()) throw new Error('运行已停止');
     const maafw = path.join(RUNTIME, 'maafw');
     fs.mkdirSync(path.join(maafw, 'config'), { recursive: true });
     fs.mkdirSync(path.dirname(reportFile), { recursive: true });
@@ -379,12 +392,18 @@ export const endfield = {
     const track = { pos: 0, rest: '' };
     const read = () => readLines(reportFile, track, onEvent);
     const watch = setInterval(read, 2000);
-    await new Promise((resolve) => child.on('close', resolve));
-    clearInterval(watch);
-    clearInterval(check);
-    clearTimeout(timer);
-    ctx.setChild(null);
-    read();
+    try {
+      await new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', resolve);
+      });
+    } finally {
+      clearInterval(watch);
+      clearInterval(check);
+      clearTimeout(timer);
+      ctx.setChild(null);
+      read();
+    }
     return { timedOut, gone };
   },
 
