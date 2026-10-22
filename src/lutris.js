@@ -24,7 +24,7 @@ function yamlValue(text, section, key) {
   return null;
 }
 
-function yamlEnv(text, section) {
+function yamlEnv(text, section, map = 'env') {
   const env = {};
   const lines = text.split('\n');
   let inSection = false;
@@ -36,7 +36,7 @@ function yamlEnv(text, section) {
       continue;
     }
     if (!inSection) continue;
-    if (/^ {2}env:\s*$/.test(line)) {
+    if (line.trimEnd() === `  ${map}:`) {
       inEnv = true;
       continue;
     }
@@ -68,24 +68,37 @@ export function lutrisGame(slug) {
   const wine = path.join(RUNNERS, version || '', 'files/bin/wine');
   if (!version || !fs.existsSync(wine)) throw new Error(`找不到 Lutris 为 ${slug} 配置的 Wine：${version || '未设置'}`);
   const locale = yamlValue(text, 'system', 'locale') || yamlValue(globalWine, 'system', 'locale');
+  const overrides = { ...yamlEnv(globalWine, 'wine', 'overrides'), ...yamlEnv(text, 'wine', 'overrides') };
+  const proton = path.join(RUNNERS, version, 'proton');
+  const umu = path.join(HOME, '.local/share/lutris/runtime/umu/umu-run');
   return {
     slug,
     prefix,
     exe,
     wine,
     wineserver: path.join(path.dirname(wine), 'wineserver'),
-    env: { ...(locale ? { LC_ALL: locale } : {}), ...yamlEnv(globalWine, 'system'), ...yamlEnv(text, 'system') },
+    proton: fs.existsSync(proton) && fs.existsSync(umu) ? path.dirname(proton) : null,
+    umu,
+    env: { ...(locale ? { LC_ALL: locale } : {}),
+      ...(Object.keys(overrides).length ? { WINEDLLOVERRIDES: Object.entries(overrides).map(([k, v]) => `${k}=${v}`).join(';') } : {}),
+      ...yamlEnv(globalWine, 'system'), ...yamlEnv(text, 'system') },
   };
 }
 
 // Whether one of these Windows programs of this prefix runs anywhere (the owner may be playing).
 export function prefixBusy(prefix, ...exes) {
+  if (!exes.length) return 0;
+  const actualPrefix = fs.realpathSync(prefix);
   for (const pid of fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n))) {
     try {
       const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-      if (!exes.some((exe) => cmd.includes(exe))) continue;
-      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8');
-      if (env.includes(`WINEPREFIX=${prefix}\0`) || env.includes(`WINEPREFIX=${prefix}/\0`)) return Number(pid);
+      if (exes.length && !exes.some((exe) => cmd.includes(exe))) continue;
+      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+      const paths = env.filter((v) => v.startsWith('WINEPREFIX=') || v.startsWith('STEAM_COMPAT_DATA_PATH='));
+      if (paths.some((v) => {
+        try { return fs.realpathSync(v.slice(v.indexOf('=') + 1)) === actualPrefix; }
+        catch { return false; }
+      })) return Number(pid);
     } catch {}
   }
   return 0;

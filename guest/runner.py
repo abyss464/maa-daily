@@ -136,31 +136,41 @@ def main():
         emit("fatal", msg="MAA 资源加载失败")
         return 2
 
-    current = CURRENT
-
-    @Asst.CallBackType
-    def callback(msg, details, arg):
+    def handle_callback(current, msg, details, arg):
+        if not current["active"]:
+            return
         try:
             m = Message(msg)
         except ValueError:
             return
-        d = json.loads(details.decode("utf-8"))
+        try:
+            d = json.loads(details.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, AttributeError):
+            emit("log", level="error", msg=f"Invalid MAA callback payload: {details!r}",
+                 account=current["id"])
+            return
         acc = current["id"]
+
+        def callback_log(msg, level="info"):
+            emit("log", level=level, msg=msg, account=acc)
+
         chain = d.get("taskchain")
         if m == Message.ConnectionInfo:
             what = d.get("what")
             if what in ("ConnectFailed", "UnsupportedResolution", "ResolutionError", "Disconnect", "ScreencapFailed"):
-                log(f"连接问题：{what} {d.get('why', '')}", "error")
+                callback_log(f"连接问题：{what} {d.get('why', '')}", "error")
             elif what in ("Connected", "Reconnecting", "Reconnected"):
-                log(f"连接：{what}")
+                callback_log(f"连接：{what}")
         elif m in (Message.TaskChainStart, Message.TaskChainCompleted, Message.TaskChainError, Message.TaskChainStopped):
             state = {Message.TaskChainStart: "start", Message.TaskChainCompleted: "done",
                      Message.TaskChainError: "error", Message.TaskChainStopped: "stopped"}[m]
             if chain:
-                current["chains"][chain] = state
-                emit("chain", account=acc, chain=chain, state=state)
+                # A later completion cannot erase a reported chain failure.
+                if current["chains"].get(chain) not in ("error", "stopped"):
+                    current["chains"][chain] = state
+                emit("chain", account=acc, chain=chain, state=current["chains"][chain])
         elif m == Message.SubTaskError:
-            log(f"{chain} 子任务出错：{d.get('subtask', '')} {d.get('details', {})}", "warn")
+            callback_log(f"MAA subtask error: {json.dumps(d, ensure_ascii=False)}", "warn")
         elif m == Message.SubTaskExtraInfo:
             what, det = d.get("what"), d.get("details") or {}
             if what == "StageDrops":
@@ -171,53 +181,118 @@ def main():
             elif what == "RecruitResult":
                 emit("recruit", account=acc, level=det.get("level"), tags=det.get("tags"))
             elif what == "RecruitTagsSelected":
-                log(f"公招选择：{'、'.join(det.get('tags') or [])}")
+                callback_log(f"公招选择：{'、'.join(det.get('tags') or [])}")
             elif what == "ProductOfFacility":
-                log(f"基建：{det.get('facility')} {det.get('index')} 产物 {det.get('product')}")
+                callback_log(f"基建：{det.get('facility')} {det.get('index')} 产物 {det.get('product')}")
             elif what == "NotEnoughStaff":
-                log(f"基建：{det.get('facility')} 可用干员不足", "warn")
+                callback_log(f"基建：{det.get('facility')} 可用干员不足", "warn")
             elif what == "UseMedicine":
                 emit("medicine", account=acc, count=det.get("count"), expiring=det.get("is_expiring"))
             elif what == "StoneConfirm" or what == "UseStone":
                 emit("stone", account=acc, count=det.get("count"))
             elif what == "FightTimes" and det.get("times_finished"):
-                log(f"作战：已完成 {det.get('times_finished')} 次")
+                callback_log(f"作战：已完成 {det.get('times_finished')} 次")
             elif what == "SanityBeforeStage":
                 emit("sanity", account=acc, current=det.get("current_sanity"), max=det.get("max_sanity"))
 
-    asst = Asst(callback=callback)
-    asst.set_instance_option(InstanceOptionType.touch_type, job.get("touch_type", "maatouch"))
-    log(f"MAA {asst.get_version()} 连接 {address}")
-    if not asst.connect(adb, address, job.get("connect_config", "General")):
-        emit("fatal", msg="MAA 无法连接模拟器")
-        return 2
-
     account_timeout = job.get("account_timeout", 5400)
+    cancellation_timeout = 60
     accounts = job.get("accounts") or []
+    # Retain native callback objects until shutdown, including those of stopped accounts.
+    instances = []
     for i, acc in enumerate(accounts):
-        current["id"], current["chains"] = acc["id"], {}
-        emit("account", account=acc["id"], phase="start", name=acc.get("name"))
-        if not ensure_game(adb, address, acc.get("client_type") or "Official"):
-            log("游戏没有启动起来", "error")
+        current = {"id": acc["id"], "chains": {}, "active": True}
+        CURRENT["id"] = acc["id"]
+        started = time.monotonic()
+        deadline = started + account_timeout
+        timed_out = False
+        cancelled = True
+        error = None
         tasks = build_tasks(acc)
-        for name, params in tasks:
-            asst.append_task(name, params)
         if i == len(accounts) - 1 and job.get("close_game"):
-            asst.append_task("CloseDown", {"client_type": acc.get("client_type") or "Official"})
-        asst.start()
-        started, timed_out = time.time(), False
-        while asst.running():
-            if time.time() - started > account_timeout:
+            tasks.append(("CloseDown", {"client_type": acc.get("client_type") or "Official"}))
+        requested = [name for name, _ in tasks]
+
+        @Asst.CallBackType
+        def callback(msg, details, arg, context=current):
+            handle_callback(context, msg, details, arg)
+
+        asst = Asst(callback=callback)
+        instances.append((asst, callback, current))
+        asst.set_instance_option(InstanceOptionType.touch_type, job.get("touch_type", "maatouch"))
+
+        def stop_and_wait():
+            """Do not transfer the shared emulator while native work is still active."""
+            asst.stop()
+            stop_deadline = time.monotonic() + cancellation_timeout
+            while asst.running() and time.monotonic() < stop_deadline:
+                time.sleep(0.2)
+            return not asst.running()
+
+        def run_phase(phase_tasks):
+            nonlocal timed_out, cancelled, error
+            for name, params in phase_tasks:
+                current["chains"][name] = "pending"
+                if not asst.append_task(name, params):
+                    current["chains"][name] = "error"
+                    error = f"MAA could not append task: {name}"
+                    log(error, "error")
+                    cancelled = stop_and_wait()
+                    return False
+            if time.monotonic() >= deadline:
                 timed_out = True
-                log(f"账号运行超过 {account_timeout // 60} 分钟，停止", "error")
-                asst.stop()
-                break
-            time.sleep(1)
-        chains = current["chains"]
-        failed = [c for c, s in chains.items() if s != "done"]
-        ok = not timed_out and chains.get("StartUp") == "done" and not failed
+                error = f"Account exceeded its {account_timeout} second limit"
+                log(error, "error")
+                cancelled = stop_and_wait()
+                return False
+            if not asst.start():
+                error = "MAA could not start the task queue"
+                log(error, "error")
+                cancelled = stop_and_wait()
+                return False
+            while asst.running():
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    error = f"Account exceeded its {account_timeout} second limit"
+                    log(error, "error")
+                    cancelled = stop_and_wait()
+                    return False
+                if (len(phase_tasks) == 1 and phase_tasks[0][0] == "StartUp"
+                        and current["chains"].get("StartUp") in ("error", "stopped")):
+                    error = "MAA reported an unsuccessful task chain"
+                    log(error, "error")
+                    cancelled = stop_and_wait()
+                    return False
+                time.sleep(0.2)
+            incomplete = [name for name, _ in phase_tasks if current["chains"].get(name) != "done"]
+            if incomplete:
+                error = f"MAA did not complete requested tasks: {', '.join(incomplete)}"
+                log(error, "error")
+                return False
+            return True
+
+        emit("account", account=acc["id"], phase="start", name=acc.get("name"))
+        log(f"MAA {asst.get_version()} 连接 {address}")
+        if not asst.connect(adb, address, job.get("connect_config", "General")):
+            error = "MAA could not connect to the emulator"
+            log(error, "error")
+        elif not ensure_game(adb, address, acc.get("client_type") or "Official"):
+            error = "The game did not start"
+            log("游戏没有启动起来", "error")
+        elif run_phase(tasks[:1]) and len(tasks) > 1:
+            run_phase(tasks[1:])
+        # Each native instance owns its immutable account context. Late callbacks from
+        # this account cannot update the next account, and are ignored after its end.
+        current["active"] = False
+        chains = {name: current["chains"].get(name, "not_run") for name in requested}
+        failed = [name for name, state in chains.items() if state != "done"]
+        ok = not error and not timed_out and not failed
         emit("account", account=acc["id"], phase="end", ok=ok, chains=chains, timed_out=timed_out,
-             seconds=round(time.time() - started))
+             error=error, seconds=round(time.monotonic() - started))
+        if not cancelled:
+            emit("fatal", msg=f"MAA is still active {cancellation_timeout} seconds after cancellation; "
+                 "remaining accounts were not started")
+            return 2
     emit("finished")
     return 0
 

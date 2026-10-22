@@ -11,6 +11,7 @@ import { store, runs } from './store.js';
 import { orchestrator } from './orchestrator.js';
 import { vm } from './vm.js';
 import { OWN_MARK } from './games/endfield.js';
+import { GAMES } from './games/index.js';
 
 const SAMPLE_MS = 10_000;
 const BUSY_MS = 2 * 60_000;
@@ -45,6 +46,7 @@ export function accountStatus(now = Date.now()) {
     }
   }
   const out = {};
+  const blocked = Object.fromEntries(Object.entries(GAMES).map(([id, driver]) => [id, driver.blocked?.(s) || null]));
   for (const a of store.accounts()) {
     const st = seen[a.id] || { lastOk: null, lastAttempt: null, lastStatus: null };
     const stale = !st.lastOk || st.lastOk < lastReset(now) || now - st.lastOk >= s.intervalHours * 3600_000;
@@ -54,6 +56,7 @@ export function accountStatus(now = Date.now()) {
       lastAttempt: st.lastAttempt && new Date(st.lastAttempt).toISOString(),
       lastStatus: st.lastStatus,
       completed: !stale,
+      blocked: blocked[a.game || 'arknights'],
       due: a.enabled && stale && !backoff,
       retryAt: backoff ? new Date(st.lastAttempt + s.retryMinutes * 60_000).toISOString() : null,
       nextDue: stale ? null : new Date(Math.min(lastReset(now) + 86400_000, st.lastOk + s.intervalHours * 3600_000)).toISOString(),
@@ -62,7 +65,7 @@ export function accountStatus(now = Date.now()) {
   return out;
 }
 
-const dueIds = () => Object.entries(accountStatus()).filter(([, v]) => v.due).map(([id]) => id);
+const dueIds = () => Object.entries(accountStatus()).filter(([, v]) => v.due && !v.blocked).map(([id]) => id);
 
 // ---- load sampling ----
 
@@ -273,7 +276,9 @@ export function startScheduler() {
 // becomes due again.
 export function nextDue() {
   const all = accountStatus();
-  const st = store.accounts().filter((a) => a.enabled).map((a) => all[a.id]);
+  const enabled = store.accounts().filter((a) => a.enabled).map((a) => all[a.id]);
+  const st = enabled.filter((a) => !a.blocked);
+  if (!st.length && enabled.length) return 'blocked';
   if (st.some((v) => v.due)) return 'now';
   const times = st.map((v) => v.retryAt || v.nextDue).filter(Boolean).sort();
   return times[0] || null;

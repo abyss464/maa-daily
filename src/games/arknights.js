@@ -91,7 +91,9 @@ export const arknights = {
         kill: () => {
           child.kill();
           // Ending the SSH session may leave the guest's Python running: end it there too.
-          vm.exec(ref, "Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force; 'ok'").catch(() => {});
+          vm.exec(ref, `Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" | ` +
+            `Where-Object { $_.CommandLine -and $_.CommandLine.Contains(${ps(`${g.runnerDir}\\runner.py`)}) } | ` +
+            `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; 'ok'`).catch(() => {});
         },
       });
       await child.done;

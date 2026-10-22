@@ -72,7 +72,15 @@ class Orchestrator {
 
   startRun(trigger, accountIds = null) {
     const all = store.accounts();
-    const accounts = accountIds ? all.filter((a) => accountIds.includes(a.id)) : all.filter((a) => a.enabled);
+    const selected = accountIds ? all.filter((a) => accountIds.includes(a.id)) : all.filter((a) => a.enabled);
+    const blocked = new Map();
+    for (const a of selected) {
+      const reason = gameOf(a).blocked?.(store.settings());
+      if (reason) blocked.set(a.id, `${gameOf(a).label}：${reason}`);
+    }
+    if (accountIds && blocked.size) throw Object.assign(new Error([...blocked.values()][0]), { status: 409 });
+    const accounts = selected.filter((a) => !blocked.has(a.id));
+    if (!accounts.length && blocked.size) throw Object.assign(new Error([...blocked.values()][0]), { status: 409 });
     if (!accounts.length) throw Object.assign(new Error('没有可运行的账号'), { status: 400 });
     const cur = this.claim('run', '运行日常');
     const run = {
@@ -85,6 +93,7 @@ class Orchestrator {
     cur.trigger = trigger;
     runs.save(run);
     this.log(run.id, `开始运行（${TRIGGER[trigger] || trigger}），账号：${accounts.map((a) => a.name).join('、')}`);
+    for (const reason of new Set(blocked.values())) this.log(run.id, `暂不运行：${reason}`);
     this.execute(run, accounts).catch((e) => {
       if (cur.stopping) this.markStopped(run);
       else {
@@ -325,6 +334,6 @@ class Orchestrator {
 export const STATUS = { running: '运行中', ok: '成功', partial: '部分成功', failed: '失败', stopped: '已停止', yielded: '已让出', interrupted: '被中断', skipped: '跳过' };
 const TRIGGER = { idle: '闲时', manual: '手动' };
 const CHAINS = { StartUp: '开始唤醒', Fight: '理智作战', Recruit: '公开招募', Infrast: '基建换班', Mall: '信用商店', Award: '领取奖励', CloseDown: '关闭游戏', AccountSwitch: '切换账号' };
-const CHAIN_STATE = { done: '完成', error: '出错', stopped: '被停止', start: '进行中' };
+const CHAIN_STATE = { done: '完成', error: '出错', stopped: '被停止', start: '进行中', pending: '等待', not_run: '未运行' };
 
 export const orchestrator = new Orchestrator();

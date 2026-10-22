@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { config } from '../config.js';
 import { lutrisGame, prefixBusy } from '../lutris.js';
 import { screens } from '../screens.js';
@@ -15,18 +15,38 @@ const MAAEND = process.env.MAAEND_DIR || path.join(os.homedir(), 'Code/vendor/Ma
 // The CLI takes the project from its libraries' folder: the runtime is a folder of links that
 // holds both (endfield/link-runtime.sh builds it).
 const RUNTIME = path.join(config.dataDir, 'maaend-runtime');
+const PREFIX = process.env.MAA_DAILY_ENDFIELD_PREFIX || path.join(config.dataDir, 'endfield-prefix');
 const EXE = 'Endfield.exe';
-// The client starts only from the official launcher, whose window carries this title; the game's
-// window and its SDK's (login, agreements) carry these.
-const LAUNCHER_TITLE = '鹰角启动器';
+// The target client and its SDK's login/agreements window.
 const GAME_TITLE = 'Endfield';
+const LAUNCHER_TITLE = '鹰角启动器';
 const SDK_TITLE = 'UIPlatform';
-// An update of the client downloads and installs several GB: the launcher gets this long.
-const LAUNCHER_LIMIT_MIN = 90;
 // Processes carrying this mark are the run's own (the game, MaaEnd and its agents): the idle
 // judgement leaves their load out.
 export const OWN_MARK = 'MAA_DAILY_OWN=1';
 const MANUAL_LABEL = '终末地（手动）';
+
+// Lutris supplies the runtime and installed files; automation keeps its Windows state separate.
+function dailyGame(settings) {
+  const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
+  const registry = fs.readFileSync(path.join(game.prefix, 'system.reg'), 'utf8');
+  const section = registry.split(/\n\n/).find((s) => s.includes('"Publisher"="Shanghai Hypergryph Network Technology Co., Ltd."'));
+  const location = section && /^"InstallLocation"="(.+)"$/m.exec(section)?.[1].replaceAll('\\\\', '\\');
+  const install = location && /^C:\\/i.test(location)
+    ? path.join(game.prefix, 'drive_c', ...location.slice(3).split('\\'), 'games') : null;
+  const folders = install && fs.existsSync(install) ? fs.readdirSync(install) : [];
+  const client = path.basename(game.exe || '').toLowerCase() === EXE.toLowerCase() ? game.exe
+    : folders.map((name) => path.join(install, name, EXE)).find((p) => fs.existsSync(p));
+  if (!client || !fs.existsSync(client)) throw new Error('没有找到已安装的终末地客户端 Endfield.exe');
+  const localClient = path.join(PREFIX, path.relative(game.prefix, client));
+  const localLauncher = path.join(PREFIX, path.relative(game.prefix, path.join(path.dirname(install), 'Launcher.exe')));
+  if (!fs.existsSync(localClient) || !fs.existsSync(localLauncher)) throw new Error('终末地日常的独立运行环境尚未准备好');
+  return { ...game, sourcePrefix: game.prefix, prefix: PREFIX, exe: localClient, launcher: localLauncher };
+}
+
+function gameBlocked(game) {
+  return prefixBusy(game.sourcePrefix, EXE) || prefixBusy(game.prefix, EXE) ? '终末地正在其他窗口运行' : null;
+}
 
 // ---- MaaEnd's catalogue: tasks, their options and presets, with Chinese labels ----
 
@@ -205,18 +225,34 @@ const INTERRUPTS = {
 
 const sh = (s) => `'${String(s).replace(/'/g, `'\\''`)}'`;
 
-const gameEnv = (game) => ({ ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all', DXVK_LOG_LEVEL: 'none', MAA_DAILY_OWN: '1' });
+const gameEnv = (game) => ({ ...game.env, WINEPREFIX: game.prefix, WINEESYNC: '1', WINEFSYNC: '1', WINEDEBUG: '-all',
+  DXVK_LOG_LEVEL: 'error', MAA_DAILY_OWN: '1',
+  ...(game.proton ? { PROTONPATH: game.proton, PROTON_VERB: 'run', GAMEID: 'umu-endfield', UMU_RUNTIME_UPDATE: '0',
+    UMU_FOLDERS_PATH: path.join(os.homedir(), '.local/share') } : {}) });
 
 // A shell command starting a Windows program of the game's prefix from its own folder.
-function wineCommand(game, exe) {
+function wineCommand(game, exe, args = []) {
   const envArgs = Object.entries(gameEnv(game)).map(([k, v]) => `${k}=${sh(v)}`).join(' ');
-  return `sh -c ${sh(`cd ${sh(path.dirname(exe))} && exec env ${envArgs} ${sh(game.wine)} ${sh(path.basename(exe))}`)}`;
+  const log = path.join(config.dataDir, 'endfield-client.log');
+  const runtime = game.proton ? game.umu : game.wine;
+  const command = [exe, ...args].map(sh).join(' ');
+  return `sh -c ${sh(`cd ${sh(path.dirname(exe))} && exec env ${envArgs} ${sh(runtime)} ${command} > ${sh(log)} 2>&1`)}`;
 }
 
-function killPrefix(game) {
-  try {
-    execFileSync(game.wineserver, ['-k'], { env: { ...process.env, WINEPREFIX: game.prefix }, timeout: 30_000 });
-  } catch {}
+function killGame(game) {
+  const prefix = fs.realpathSync(game.prefix);
+  for (const pid of fs.readdirSync('/proc').filter((n) => /^\d+$/.test(n))) {
+    try {
+      const env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+      if (!env.includes(OWN_MARK)) continue;
+      const ownPrefix = env.find((v) => v.startsWith('WINEPREFIX='))?.slice('WINEPREFIX='.length);
+      if (!ownPrefix || fs.realpathSync(ownPrefix) !== prefix) continue;
+      const command = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')[0];
+      // Shared Wine infrastructure may also serve a different game in the same prefix.
+      if (/wineserver|services\.exe|winedevice\.exe|rpcss\.exe/i.test(command)) continue;
+      process.kill(Number(pid), 'SIGTERM');
+    } catch {}
+  }
 }
 
 // Whether a window of this title is on the screen within the time given (present = false: whether
@@ -225,7 +261,8 @@ async function waitWindow(screenId, title, seconds, present = true, stopping = (
   const until = Date.now() + seconds * 1000;
   for (;;) {
     if (stopping()) throw new Error('运行已停止');
-    const found = await screens.get(screenId).then((x) => x.windows.some((w) => w.title === title), () => false);
+    const found = await screens.get(screenId).then((x) => x.windows.some((w) => w.title === title ||
+      (title === GAME_TITLE && w.title.startsWith(`${GAME_TITLE} - `))), () => false);
     if (found === present || Date.now() >= until) return found === present;
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -262,17 +299,27 @@ export const endfield = {
   label: '明日方舟：终末地',
   activeScreen: null,
 
+  blocked(settings) {
+    if (this.activeScreen) return null;
+    try {
+      const game = dailyGame(settings);
+      return gameBlocked(game);
+    } catch (e) {
+      return e.message;
+    }
+  },
+
   async run(ctx, run, accounts) {
     const settings = ctx.settings;
     const cat = catalog();
     if (!cat.available) throw new Error(cat.error);
     if (!fs.existsSync(path.join(RUNTIME, 'maafw', 'MaaPiCli'))) throw new Error('MaaEnd 运行目录没有建好：运行 endfield/link-runtime.sh');
-    const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
+    const game = dailyGame(settings);
     if (!game.exe || !fs.existsSync(game.exe)) throw new Error(`Lutris 里终末地的启动程序不存在：${game.exe || '未设置'}`);
-    if (prefixBusy(game.prefix, EXE, path.basename(game.exe))) throw new Error('终末地或它的启动器已经在运行（可能有人在玩），这一轮不运行');
+    if (gameBlocked(game)) throw new Error(gameBlocked(game));
 
     ctx.stage('申请屏幕');
-    const screen = await screens.open({ label: '终末地日常', ttl: (accounts.length * settings.accountTimeoutMin + LAUNCHER_LIMIT_MIN + 30) * 60 });
+    const screen = await screens.open({ width: 1280, height: 720, label: '终末地日常', ttl: (accounts.length * settings.accountTimeoutMin + 120) * 60 });
     this.activeScreen = screen.id;
     try {
       if (ctx.stopping()) throw new Error('运行已停止');
@@ -286,18 +333,15 @@ export const endfield = {
         ctx.event({ ev: 'account', account: acc.id, phase: 'start' });
         const started = Date.now();
         let attempt = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
-        // A game that quits (it asks for a restart once an update's resources are in, or quits
-        // over an outdated client) or cannot reach the open world (it hangs on a screen nothing
-        // handles) is restarted once from the launcher, which first installs an update when there
-        // is one, and the account runs again.
+        // Retry the target client once if it exits or fails to enter the open world.
         // The SDK's window still up means the game waits for a person (a login, a new agreement):
         // a run never answers it, and a restart would not either.
         const waitsForPerson = attempt.track.enterFailed && (await waitWindow(screen.id, SDK_TITLE, 0));
         if (waitsForPerson) ctx.log('终末地在等人登录或同意新协议：在面板上「打开终末地」处理后，下一轮会接着跑', acc.name);
         if ((attempt.gone || attempt.track.enterFailed) && !waitsForPerson && !restarted && !ctx.stopping()) {
           restarted = true;
-          ctx.log(`${attempt.gone ? '游戏退出了' : '进不了大世界'}：从启动器重启终末地（有新版本就先更新），再试一次`, acc.name);
-          killPrefix(game);
+          ctx.log(`${attempt.gone ? '游戏退出了' : '进不了大世界'}：重启终末地，再试一次`, acc.name);
+          killGame(game);
           ctx.stage('重启终末地');
           await this.startGame(ctx, screen, game);
           attempt = await this.runAccount(ctx, acc, screen, cat, accounts.length > 1);
@@ -309,47 +353,38 @@ export const endfield = {
     } finally {
       this.activeScreen = null;
       ctx.stage('关闭终末地');
-      killPrefix(game);
+      killGame(game);
       await screens.close(screen.id);
     }
   },
 
-  // The game starts as a player starts it, with the program Lutris starts it with: the official
-  // launcher (the client refuses to start on its own). The launcher's task in our MaaEnd branch
-  // updates the client when the launcher offers an update and then starts it; the launcher is then
-  // put out of sight. The SDK's window (login, agreements) floats over the game instead of taking
-  // half of the screen.
+  // Launch the target client in its own screen; other games and their launchers stay independent.
   async startGame(ctx, screen, game) {
     const checkStopped = () => {
       if (ctx.stopping()) throw new Error('运行已停止');
     };
     checkStopped();
-    // a launcher just killed may still be closing
-    await waitWindow(screen.id, LAUNCHER_TITLE, 30, false, ctx.stopping);
-    checkStopped();
     await screens.hyprctl(screen.id, `keyword windowrule float on, match:title ^(${SDK_TITLE})$`);
     checkStopped();
-    await screens.launch(screen.id, wineCommand(game, game.exe), 90);
+    await screens.launch(screen.id, wineCommand(game, game.launcher, ['--game=endfield', '--reason=4']), 0);
     checkStopped();
-    if (!(await waitWindow(screen.id, LAUNCHER_TITLE, 90, true, ctx.stopping))) throw new Error('启动器 90 秒内没有打开');
-    const report = path.join(config.dataDir, 'flow', 'launcher.report.jsonl');
-    for (let attempt = 1; attempt <= 3 && !ctx.stopping(); attempt++) {
-      const { timedOut } = await this.runPi(ctx, screen, { task: 'AutoPlayLauncher', limitMin: LAUNCHER_LIMIT_MIN, report, onEvent: (ev) => {
-        if (ev.ev === 'launcher' && ev.state === 'update') {
-          ctx.stage('更新终末地');
-          ctx.log('启动器里有新版本，正在更新终末地');
-        }
-      } });
-      if (timedOut) throw new Error(`启动器 ${LAUNCHER_LIMIT_MIN} 分钟内没有把终末地启动起来（更新没有完成？）`);
-      checkStopped();
-      if (await waitWindow(screen.id, GAME_TITLE, 60, true, ctx.stopping)) {
-        checkStopped();
-        await screens.hyprctl(screen.id, `dispatch movetoworkspacesilent special:launcher,title:^(${LAUNCHER_TITLE})$`);
-        await screens.hyprctl(screen.id, `dispatch focuswindow title:^(${GAME_TITLE})$`);
-        return;
-      }
+    if (!(await waitWindow(screen.id, LAUNCHER_TITLE, 90, true, ctx.stopping))) {
+      const log = fs.readFileSync(path.join(config.dataDir, 'endfield-client.log'), 'utf8').trim();
+      if (log) ctx.log(log.slice(-2000));
+      throw new Error('终末地客户端没有打开，见运行记录中的客户端输出');
     }
-    if (!ctx.stopping()) throw new Error('启动器没能把终末地启动起来');
+    checkStopped();
+    ctx.stage('启动终末地客户端');
+    const report = path.join(config.dataDir, 'flow', 'launcher.report.jsonl');
+    const result = await this.runPi(ctx, screen, { task: 'AutoPlayLauncher', limitMin: 90, report, onEvent: (ev) => {
+      if (ev.ev === 'launcher' && ev.state === 'update') ctx.log('终末地客户端需要更新，正在更新');
+    } });
+    checkStopped();
+    if (result.timedOut || !prefixBusy(game.prefix, EXE)) throw new Error('终末地客户端未能启动，见目标屏幕画面');
+    if (!(await waitWindow(screen.id, GAME_TITLE, 90, true, ctx.stopping))) throw new Error('终末地客户端没有显示游戏窗口');
+    await screens.hyprctl(screen.id, `dispatch movetoworkspacesilent special:launcher,title:^(${LAUNCHER_TITLE})$`);
+    await screens.hyprctl(screen.id, `dispatch focuswindow title:^(${GAME_TITLE})$`);
+    await screens.hyprctl(screen.id, 'dispatch fullscreenstate 2 2');
   },
 
   // One MaaEnd task through its CLI on this screen, ended after limitMin minutes, or as soon as
@@ -414,10 +449,10 @@ export const endfield = {
 
   async openForUser(settings, stage = () => {}) {
     if (this.manualScreen) return screens.get(this.manualScreen);
-    const game = lutrisGame(settings.endfieldLutrisGame || 'arknight');
+    const game = dailyGame(settings);
     if (!game.exe || !fs.existsSync(game.exe)) throw new Error(`Lutris 里终末地的启动程序不存在：${game.exe || '未设置'}`);
-    if (prefixBusy(game.prefix, EXE, path.basename(game.exe))) throw new Error('终末地或它的启动器已经在运行');
-    const screen = await screens.open({ label: MANUAL_LABEL, ttl: 3 * 3600, held: false });
+    if (gameBlocked(game)) throw new Error(gameBlocked(game));
+    const screen = await screens.open({ width: 1280, height: 720, label: MANUAL_LABEL, ttl: 3 * 3600, held: false });
     this.manualScreen = screen.id;
     await this.startGame({ log: () => {}, stage, stopping: () => false, setChild: () => {} }, screen, game);
     return screens.get(screen.id);
@@ -432,7 +467,7 @@ export const endfield = {
   },
 
   async closeForUser(settings) {
-    killPrefix(lutrisGame(settings.endfieldLutrisGame || 'arknight'));
+    killGame(dailyGame(settings));
     if (this.manualScreen) await screens.close(this.manualScreen);
     this.manualScreen = null;
   },

@@ -8,9 +8,15 @@ Authelia, admins only; the remote viewer opens only from the local page).
 - **Where the game runs.** A persistent pool instance (`arknights`, 16 GB, 8 CPUs) holds MuMu
   (Android 15, 1280×720, nested KVM, software rendering), the official and Bilibili clients, MAA
   (`C:\maa\MAA`) and an embedded Python (`C:\maa\python`).
-- **Endfield.** The PC client from its Lutris prefix (the Lutris game `arknight`, the official
-  launcher's install; prefix, Wine build and environment are read from Lutris at every launch) runs
-  under Wine in a screen of the hypr-screens pool, on the real GPU and invisible. MaaEnd, from our own
+- **Endfield.** The installed `Endfield.exe` runs in a screen of the hypr-screens pool, on the real
+  GPU and invisible. Its runtime and DLL overrides are read from the Lutris game `arknight` at
+  every launch; a Proton build is started through Lutris's existing umu runtime instead of its
+  bare Wine binary. Automation keeps its Windows state in `~/.local/share/maa-daily/endfield-prefix`
+  and shares the already-installed game directory. `endfield/prepare-prefix.sh LUTRIS_PREFIX`
+  prepares that environment with reflinks, leaving the original prefix unchanged. An Endfield client
+  already running elsewhere, including through Proton's `pfx` alias, is shown as occupied and
+  skipped until it is free. Other games in the same prefix do not block it; cleanup only ends
+  processes started by this service and never shuts down the shared Wine server. MaaEnd, from our own
   branch (`~/Code/vendor/MaaEnd`, branch `maa-daily`, see its `MAA-DAILY.md`), drives it with its CLI
   through the `Linux-Wlroots` controller, account after account. Each account is one MaaEnd
   `AutoPlay` task whose flow controller runs a plan the service writes
@@ -21,16 +27,14 @@ Authelia, admins only; the remote viewer opens only from the local page).
   state machine on a virtual pad (it skips story and follows the tracked quest; see `MAA-DAILY.md`);
   it needs write access to `/dev/uinput`, and 0 minutes turns it off.
   `endfield/link-runtime.sh` lays the built MaaEnd out the way its CLI wants it.
-  The game starts as a player starts it, with the program Lutris starts it with, the official
-  launcher (the client refuses to start on its own): MaaEnd's `AutoPlayLauncher` task does what the
-  launcher's button says, installing an update first when there is one, and starts the game; the
-  launcher is then moved to a hidden workspace of the screen, and the SDK's window (login,
-  agreements) floats over the game. When the game quits during a run (it asks for a restart once an
-  update's resources are in) or cannot reach the open world, it is restarted once from the launcher
-  and the account runs again. The client's anti-cheat (ACE) needs a Wine build that carries its
-  fixes: dwproton 11.0-13 or later for the 1.6 client.
-  A run skips Endfield when the game or its launcher already runs in that prefix (the owner
-  playing). For a login, a new agreement or a tutorial MaaEnd does not handle, "打开终末地（用于操作）"
+  The client's launch authorization requires the official launcher. The service opens its
+  Endfield page in the automation environment, starts the target client, then hides that window;
+  it does not use the owner's personal launcher or mod-loader. The game fills its 1280x720 screen,
+  matching MaaEnd's recognition coordinates. The SDK's window (login, agreements) floats over the game.
+  When the game exits or cannot reach
+  the open world, the target client is restarted once and the account runs again. A run skips
+  Endfield when that client already runs elsewhere. For a login, a new agreement or a tutorial
+  MaaEnd does not handle, "打开终末地（用于操作）"
   starts the game the same way in a pool screen worked from the pool's browser viewer; a run never
   enters credentials or agrees to anything itself.
 - **When it runs.** While the computer is idle by load, not by input: every 10 s the service samples
@@ -51,6 +55,9 @@ Authelia, admins only; the remote viewer opens only from the local page).
   list order, `StartUp` (switching to the account by its login name) and the account's tasks (Fight,
   Recruit, Infrast, Mall, Award), reporting every event as a `@@ {json}` line. Afterwards the service
   shuts MuMu and Windows down again when the run was what booted them.
+  Daily tasks run only after game startup succeeds. The runner checks every requested task,
+  continues other daily tasks if an individual chain fails, and isolates each account's callbacks;
+  after a timeout it waits for cancellation before another account can use the emulator.
 - **Accounts.** MAA switches only between accounts that have logged in on this emulator: each account is
   logged in once by hand ("打开游戏（用于登录）", then the remote viewer), and its login name fragment
   (e.g. the phone number's last four digits) goes into the account. An account's tasks are MAA's own

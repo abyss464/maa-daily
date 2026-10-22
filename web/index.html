@@ -338,14 +338,15 @@ async function refresh() {
     : `${dotted(id.idle ? 'good' : '', id.idle ? '空闲' : '忙')}　<span class="hint">${esc(load)}</span>`;
   $('#s-idle').title = id.idle ? `${fmt(id.since)} 起空闲` : (id.reasons || []).join('；');
   $('#s-busy').innerHTML = S.busy ? dotted('busy', esc(S.busy.stage || S.busy.label)) : dotted('', '空闲');
-  const dueN = S.accounts.filter((a) => S.due[a.id]?.due).length;
+  const dueN = S.accounts.filter((a) => S.due[a.id]?.due && !S.due[a.id]?.blocked).length;
   $('#s-next').textContent = !S.settings.enabled ? '自动运行已关闭'
+    : S.nextDue === 'blocked' ? '等待游戏环境空闲'
     : S.nextDue === 'now' ? `${dueN} 个账号待运行，${id.idle ? '即将开始' : `空闲 ${S.settings.idleMinutes} 分钟后开始`}` : S.nextDue ? `${fmt(S.nextDue)} 后的空闲时` : '没有启用的账号';
   const enabled = S.accounts.filter((a) => a.enabled);
   const doneToday = enabled.filter((a) => S.due[a.id]?.completed).length;
   $('#s-acc').textContent = `${enabled.length} 个启用 · ${doneToday} 个已完成`;
   const busy = Boolean(S.busy);
-  $('#b-run').disabled = busy || !enabled.length;
+  $('#b-run').disabled = busy || !enabled.some((a) => !S.due[a.id]?.blocked);
   $('#b-stop').classList.toggle('hide', !(busy && S.busy.kind === 'run'));
   $('#b-stop').disabled = Boolean(S.busy?.stopping);
   renderGames();
@@ -383,14 +384,15 @@ function renderGames() {
   const e = S.games?.endfield || {};
   const sc = e.screen;
   const efState = sc ? dotted('busy', sc.manual ? `已打开，屏幕 ${sc.id}（手动）` : `运行中，屏幕 ${sc.id}`)
-    : e.lutris?.playing ? dotted('good', '正在运行（不是这里打开的，可能你在玩）') : dotted('', '未运行');
+    : e.blocked ? dotted('', esc(e.blocked))
+      : e.lutris?.playing ? dotted('good', '正在运行（不是这里打开的，可能你在玩）') : dotted('', '未运行');
   const ef = card('endfield', [
     ['环境', e.lutris?.error ? dotted('bad', esc(e.lutris.error)) : `Lutris ${esc(e.lutris?.slug || '')} · ${esc(e.lutris?.wine || '')} · 屏幕池`],
     ['MaaEnd', e.maaend?.available ? `自维护分支${e.maaend.version ? ` ${esc(e.maaend.version)}` : ''}` : dotted('bad', esc(e.maaend?.error || '不可用'))],
     ['游戏', efState],
   ], `${sc?.vnc && reachable(sc.viewer) ? `<a class="btn sm" href="${esc(sc.viewer)}" target="_blank" rel="noopener">远程操作</a>` : ''}
      ${sc?.manual ? `<button class="btn sm" data-game-act="close-ef" ${busy ? 'disabled' : ''}>关闭游戏</button>`
-       : `<button class="btn sm" data-game-act="open-ef" ${busy || sc || e.lutris?.playing ? 'disabled' : ''}>打开游戏</button>`}`);
+       : `<button class="btn sm" data-game-act="open-ef" ${busy || sc || e.blocked || e.lutris?.playing ? 'disabled' : ''}>打开游戏</button>`}`);
   const html = ak + ef;
   if (html !== renderGames.html) { $('#games').innerHTML = html; renderGames.html = html; }
 }
@@ -568,7 +570,7 @@ function renderAccounts(force = true) {
       const label = (k) => (ef ? G.endfield.tasks.find((t) => t.name === k)?.label : TASKS[k]) || k;
       const on = Object.entries(a.tasks || {}).filter(([, p]) => p.enable).map(([k]) => label(k));
       const d = S.due?.[a.id] || {};
-      const when = !a.enabled ? '' : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
+      const when = !a.enabled ? '' : d.blocked ? ` · ${esc(d.blocked)}` : d.due ? ' · <span style="color:var(--warn)">待运行</span>'
         : d.retryAt ? ` · ${d.lastStatus === 'stopped' ? '已手动停止' : '上次失败'}，${fmt(d.retryAt)} 后重试` : d.lastOk ? ` · 已完成（${fmt(d.lastOk)}）` : '';
       const i = list.indexOf(a);
       return `<div class="acc ${a.enabled ? '' : 'off'}" data-id="${esc(a.id)}">
@@ -579,7 +581,7 @@ function renderAccounts(force = true) {
           <span class="right">
             <button class="btn sm" data-act="up" ${i ? '' : 'disabled'} title="上移">↑</button>
             <button class="btn sm" data-act="down" ${i < list.length - 1 ? '' : 'disabled'} title="下移">↓</button>
-            <button class="btn sm" data-act="runone" ${S.busy ? 'disabled' : ''}>只运行它</button>
+            <button class="btn sm" data-act="runone" ${S.busy || d.blocked ? 'disabled' : ''}>只运行它</button>
             <button class="btn sm" data-act="edit">${open.has(a.id) ? '收起' : '编辑'}</button>
             <button class="btn sm danger" data-act="del">删除</button>
           </span>

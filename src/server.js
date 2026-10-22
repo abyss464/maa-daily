@@ -106,7 +106,8 @@ async function environments() {
   }
   return {
     arknights: { guest: await guest() },
-    endfield: { maaend: { available: ef.available, version: ef.version, error: ef.error }, lutris, screen: await poolScreen() },
+    endfield: { maaend: { available: ef.available, version: ef.version, error: ef.error }, lutris,
+      blocked: GAMES.endfield.blocked(settings), screen: await poolScreen() },
   };
 }
 
